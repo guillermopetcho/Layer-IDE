@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: layer-notebook-dash
+Version: 0.1.0
+Summary: Interactive code editor (IDE) for Kaggle and Jupyter notebooks with Layer.Dash
+Author: Layer Dev Team
+License: MIT
+Project-URL: Homepage, https://github.com/layer/layer-notebook-dash
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Framework :: IPython
+Classifier: Framework :: Jupyter
+Description-Content-Type: text/markdown
+Requires-Dist: IPython>=7.0.0
+Requires-Dist: ipykernel>=6.0.0
+Requires-Dist: ipywidgets>=7.6.0

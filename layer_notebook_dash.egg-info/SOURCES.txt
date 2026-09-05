@@ -1,0 +1,15 @@
+pyproject.toml
+setup.py
+Layer/__init__.py
+Layer/dash.py
+Layer/file_manager.py
+Layer/static/editor.js
+Layer/static/styles.css
+layer/__init__.py
+layer_notebook_dash.egg-info/PKG-INFO
+layer_notebook_dash.egg-info/SOURCES.txt
+layer_notebook_dash.egg-info/dependency_links.txt
+layer_notebook_dash.egg-info/requires.txt
+layer_notebook_dash.egg-info/top_level.txt
+tests/test_dash.py
+tests/test_file_manager.py
