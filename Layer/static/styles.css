@@ -330,6 +330,25 @@
   z-index: 5;
 }
 
+/* Fallback plain-text editor (used when Monaco cannot load from CDN) */
+.layer-fallback-editor {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 12px;
+  background-color: var(--layer-bg-dark);
+  color: var(--layer-text-primary);
+  font-family: "Consolas", "Menlo", "Monaco", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+}
+
 /* Execution / Terminal Bottom Panel */
 .layer-terminal {
   height: 160px;

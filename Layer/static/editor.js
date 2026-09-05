@@ -45,6 +45,9 @@
     let activeTabPath = null;
     let currentTreeItems = [];
     let imageViewerEl = null;
+    let usingMonaco = true;
+    let fallbackTextarea = null;
+    let fallbackCurrentModel = null;
 
     // --- Helper Functions to locate environment frames ---
     function getAccessibleFrames() {
@@ -336,28 +339,143 @@
     }
 
     // --- Initialize Monaco Editor ---
+    // Monaco loads asynchronously from a CDN. Some notebook environments
+    // (notably Kaggle's sandboxed output iframes) can block or fail that
+    // external request, which used to leave the whole IDE silently blank
+    // because every other step (file tree, tabs, initial file) only ran
+    // inside Monaco's success callback. This now always resolves to either
+    // Monaco or a working plain-text fallback within a bounded time.
     function initMonaco() {
       if (window.monaco) {
         setupEditorInstance();
+        return;
+      }
+
+      let settled = false;
+      const timeoutId = setTimeout(() => finishFailure('timeout loading editor assets'), 8000);
+
+      function finishSuccess() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        setupEditorInstance();
+      }
+
+      function finishFailure(reason) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        console.warn('Layer IDE: Monaco Editor could not be loaded (' + reason + '). Falling back to a basic text editor.');
+        showToast('No se pudo cargar Monaco Editor (¿CDN bloqueado en este entorno?). Usando editor básico.', 'error');
+        setupFallbackEditor();
+      }
+
+      if (!window.require) {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js';
+        script.onload = () => loadMonacoCDN(finishSuccess, finishFailure);
+        script.onerror = () => finishFailure('require.js failed to load');
+        document.head.appendChild(script);
       } else {
-        if (!window.require) {
-          const script = document.createElement('script');
-          script.src = 'https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js';
-          script.onload = loadMonacoCDN;
-          document.head.appendChild(script);
-        } else {
-          loadMonacoCDN();
-        }
+        loadMonacoCDN(finishSuccess, finishFailure);
       }
     }
 
-    function loadMonacoCDN() {
-      window.require.config({
-        paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }
+    function loadMonacoCDN(onSuccess, onFailure) {
+      try {
+        window.require.config({
+          paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' }
+        });
+        window.require(['vs/editor/editor.main'], onSuccess, () => onFailure('monaco-editor AMD module failed to load'));
+      } catch (e) {
+        onFailure('exception while requesting monaco-editor: ' + e.message);
+      }
+    }
+
+    // --- Fallback Plain-Text Editor (used when Monaco is unavailable) ---
+    // Implements just enough of the Monaco editor API surface that the rest
+    // of this file already calls (getValue/setValue/setModel/getSelection/
+    // executeEdits/trigger/layout) so file editing, saving, running and the
+    // AI copilot keep working without syntax highlighting.
+    function setupFallbackEditor() {
+      usingMonaco = false;
+      emptyState.style.display = 'none';
+
+      fallbackTextarea = document.createElement('textarea');
+      fallbackTextarea.className = 'layer-fallback-editor';
+      fallbackTextarea.spellcheck = false;
+      fallbackTextarea.setAttribute('autocomplete', 'off');
+      editorContainer.appendChild(fallbackTextarea);
+
+      fallbackTextarea.addEventListener('input', () => {
+        if (fallbackCurrentModel) fallbackCurrentModel.value = fallbackTextarea.value;
+        if (activeTabPath) {
+          const tab = openTabs.find((t) => t.rel_path === activeTabPath);
+          if (tab && !tab.is_dirty) {
+            tab.is_dirty = true;
+            renderTabs();
+          }
+        }
       });
-      window.require(['vs/editor/editor.main'], function () {
-        setupEditorInstance();
+
+      fallbackTextarea.addEventListener('keydown', (e) => {
+        const ctrlOrCmd = e.ctrlKey || e.metaKey;
+        if (ctrlOrCmd && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          saveActiveFile();
+        } else if (ctrlOrCmd && e.key === 'Enter') {
+          e.preventDefault();
+          runActiveFile();
+        }
       });
+
+      monacoEditor = {
+        getValue: () => fallbackTextarea.value,
+        setValue: (v) => { fallbackTextarea.value = v || ''; },
+        layout: () => {},
+        getDomNode: () => fallbackTextarea,
+        setModel: (modelLike) => {
+          fallbackCurrentModel = modelLike || { value: '' };
+          fallbackTextarea.value = fallbackCurrentModel.value || '';
+        },
+        getModel: () => ({
+          getValueInRange: () => fallbackTextarea.value.substring(fallbackTextarea.selectionStart, fallbackTextarea.selectionEnd),
+        }),
+        getSelection: () => {
+          const start = fallbackTextarea.selectionStart;
+          const end = fallbackTextarea.selectionEnd;
+          return { isEmpty: () => start === end, start, end };
+        },
+        executeEdits: (source, edits) => {
+          const edit = edits && edits[0];
+          if (!edit) return;
+          const start = fallbackTextarea.selectionStart;
+          const end = fallbackTextarea.selectionEnd;
+          const value = fallbackTextarea.value;
+          fallbackTextarea.value = value.slice(0, start) + edit.text + value.slice(end);
+          fallbackTextarea.dispatchEvent(new Event('input'));
+        },
+        trigger: (source, handlerId, payload) => {
+          const start = fallbackTextarea.selectionStart;
+          const value = fallbackTextarea.value;
+          const text = (payload && payload.text) || '';
+          fallbackTextarea.value = value.slice(0, start) + text + value.slice(start);
+          fallbackTextarea.dispatchEvent(new Event('input'));
+        },
+        onDidChangeCursorPosition: () => {},
+        onDidChangeModelContent: () => {},
+        addCommand: () => {},
+      };
+
+      if (searchInput) searchInput.value = '';
+      populateModelHub();
+
+      // Load File Explorer Tree regardless of which editor backend is active
+      loadTree('');
+
+      if (initialFile) {
+        openFile(initialFile);
+      }
     }
 
     function setupEditorInstance() {
@@ -608,7 +726,9 @@
           };
 
           if (!data.is_image) {
-            tab.model = monaco.editor.createModel(data.content, data.language);
+            tab.model = usingMonaco
+              ? monaco.editor.createModel(data.content, data.language)
+              : { value: data.content, language: data.language };
           }
 
           openTabs.push(tab);
@@ -665,7 +785,7 @@
         }
       }
 
-      if (tab.model) tab.model.dispose();
+      if (tab.model && typeof tab.model.dispose === 'function') tab.model.dispose();
       openTabs.splice(index, 1);
 
       if (activeTabPath === relPath) {
@@ -674,7 +794,9 @@
           switchTab(nextTab.rel_path);
         } else {
           activeTabPath = null;
-          if (monacoEditor) monacoEditor.setModel(monaco.editor.createModel('', 'plaintext'));
+          if (monacoEditor) {
+            monacoEditor.setModel(usingMonaco ? monaco.editor.createModel('', 'plaintext') : { value: '' });
+          }
           if (imageViewerEl) imageViewerEl.style.display = 'none';
           emptyState.style.display = 'flex';
           breadcrumbsEl.textContent = '';
