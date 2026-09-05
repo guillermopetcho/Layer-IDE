@@ -32,7 +32,7 @@ class Dash:
         height: str = "600px",
         theme: str = "vs-dark",
         initial_file: str = None,
-        display_inline: bool = True
+        display_inline: bool = False
     ):
         self.path = path
         self.height = height
@@ -74,6 +74,12 @@ class Dash:
             elif action == "rename_item":
                 response = self.file_manager.rename_item(
                     data.get("old_rel_path", ""), data.get("new_rel_path", "")
+                )
+            elif action == "duplicate_item":
+                response = self.file_manager.duplicate_item(data.get("rel_path", ""))
+            elif action == "format_code":
+                response = self.file_manager.format_code(
+                    data.get("rel_path", ""), data.get("content", None)
                 )
             elif action == "run_script":
                 response = self.file_manager.run_script(data.get("rel_path", ""))
@@ -134,8 +140,16 @@ class Dash:
               <span class="layer-breadcrumbs">{root_name}</span>
             </div>
             <div class="layer-actions">
+              <select class="layer-theme-select" title="Change Editor Theme">
+                <option value="vs-dark" selected>🌙 Dark</option>
+                <option value="vs">☀️ Light</option>
+                <option value="hc-black">⚡ High Contrast</option>
+              </select>
+              <button class="layer-btn layer-btn-format" title="Format Python Code">✨ Format</button>
               <button class="layer-btn layer-btn-save" title="Save file (Ctrl+S)">💾 Save</button>
               <button class="layer-btn layer-btn-success layer-btn-run" title="Run Python file (Ctrl+Enter)">▶ Run</button>
+              <button class="layer-icon-btn layer-btn-fullscreen" title="Toggle Fullscreen">⛶</button>
+              <button class="layer-icon-btn layer-btn-help" title="Keyboard Shortcuts">❓</button>
             </div>
           </div>
 
@@ -151,10 +165,16 @@ class Dash:
                   <button class="layer-icon-btn layer-btn-refresh" title="Refresh Tree">🔄</button>
                 </div>
               </div>
+              <div class="layer-search-container">
+                <input type="text" class="layer-search-input" placeholder="🔍 Filter files..." />
+              </div>
               <div class="layer-file-tree">
                 <!-- File Tree Items Dynamically Loaded -->
               </div>
             </div>
+
+            <!-- Vertical Drag Splitter -->
+            <div class="layer-splitter-v"></div>
 
             <!-- Main Editor View -->
             <div class="layer-main">
@@ -166,17 +186,28 @@ class Dash:
               <!-- Editor Container -->
               <div class="layer-editor-container">
                 <div class="layer-empty-state">
-                  <div style="font-size: 32px;">📄</div>
-                  <div>Select a file from the explorer to begin editing</div>
-                  <div style="font-size: 11px; opacity: 0.7;">Shortcuts: Ctrl+S to save | Ctrl+Enter to run script</div>
+                  <div style="font-size: 36px; margin-bottom: 4px;">⚡ Layer IDE</div>
+                  <div style="font-size: 14px; font-weight: 500;">Select a file from the explorer to begin editing</div>
+                  <div style="font-size: 11px; opacity: 0.7; margin-top: 6px;">
+                    Shortcuts: <kbd>Ctrl+S</kbd> Save | <kbd>Ctrl+Enter</kbd> Run | <kbd>Right-Click</kbd> Context Menu
+                  </div>
                 </div>
               </div>
+
+              <!-- Horizontal Drag Splitter -->
+              <div class="layer-splitter-h" style="display: none;"></div>
 
               <!-- Output Terminal Panel -->
               <div class="layer-terminal" style="display: none;">
                 <div class="layer-terminal-header">
-                  <span>Execution Output</span>
-                  <button class="layer-icon-btn" onclick="this.closest('.layer-terminal').style.display='none'">✕</button>
+                  <div class="layer-terminal-title">
+                    <span>⚡ Execution Output</span>
+                    <span class="layer-exec-timer" style="margin-left: 10px; opacity: 0.8; font-size: 11px;"></span>
+                  </div>
+                  <div class="layer-terminal-actions">
+                    <button class="layer-btn layer-btn-clear-term" style="padding: 2px 6px; font-size: 10px;">Clear</button>
+                    <button class="layer-icon-btn" onclick="this.closest('.layer-terminal').style.display='none'; this.closest('.layer-main').querySelector('.layer-splitter-h').style.display='none';">✕</button>
+                  </div>
                 </div>
                 <div class="layer-terminal-content"></div>
               </div>
@@ -185,9 +216,38 @@ class Dash:
 
           <!-- Bottom Status Bar -->
           <div class="layer-statusbar">
-            <span class="layer-status-text">Ready</span>
-            <span class="layer-cursor-pos">Ln 1, Col 1</span>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <span class="layer-status-text">Ready</span>
+              <span class="layer-status-lang" style="opacity: 0.8; font-size: 10px;">python</span>
+            </div>
+            <div style="display: flex; gap: 12px; align-items: center;">
+              <span class="layer-cursor-pos">Ln 1, Col 1</span>
+              <span class="layer-status-encoding">UTF-8</span>
+            </div>
           </div>
+
+          <!-- Context Menu -->
+          <div class="layer-context-menu" style="display: none;"></div>
+
+          <!-- Help Modal -->
+          <div class="layer-modal layer-help-modal" style="display: none;">
+            <div class="layer-modal-content">
+              <div class="layer-modal-header">
+                <span>Keyboard Shortcuts & Tips</span>
+                <button class="layer-icon-btn layer-modal-close">✕</button>
+              </div>
+              <div class="layer-modal-body">
+                <table class="layer-shortcuts-table">
+                  <tr><td><kbd>Ctrl + S</kbd></td><td>Save current file</td></tr>
+                  <tr><td><kbd>Ctrl + Enter</kbd></td><td>Run active Python script</td></tr>
+                  <tr><td><kbd>Right-Click</kbd></td><td>File tree context menu (Rename, Duplicate, Delete)</td></tr>
+                  <tr><td><kbd>Middle-Click</kbd></td><td>Close editor tab</td></tr>
+                  <tr><td><kbd>Drag Splitters</kbd></td><td>Resize Explorer sidebar & Terminal panel</td></tr>
+                </table>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <script>

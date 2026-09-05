@@ -125,7 +125,33 @@ class FileManager:
         if not path.is_file():
             return {"error": f"File not found: {rel_path}"}
 
-        # Check binary file
+        # Check binary/image file
+        ext = path.suffix.lower()
+        if ext in [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"]:
+            import base64
+            try:
+                with open(path, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode("utf-8")
+                mime_map = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".gif": "image/gif",
+                    ".svg": "image/svg+xml",
+                    ".webp": "image/webp",
+                    ".ico": "image/x-icon",
+                }
+                return {
+                    "rel_path": rel_path,
+                    "content": b64_data,
+                    "is_image": True,
+                    "mime_type": mime_map.get(ext, "image/png"),
+                    "size": path.stat().st_size,
+                    "mtime": path.stat().st_mtime,
+                }
+            except Exception as e:
+                return {"error": f"Cannot read image file: {str(e)}"}
+
         try:
             with open(path, "rb") as f:
                 chunk = f.read(1024)
@@ -221,6 +247,72 @@ class FileManager:
             return {"success": True, "old_rel_path": old_rel_path, "new_rel_path": new_rel_path}
         except Exception as e:
             return {"error": f"Failed to rename '{old_rel_path}': {str(e)}"}
+
+    def duplicate_item(self, rel_path: str) -> dict:
+        path = self._resolve(rel_path)
+        if not path.exists():
+            return {"error": f"Path does not exist: {rel_path}"}
+        
+        # Generate new name
+        parent = path.parent
+        stem = path.stem if path.is_file() else path.name
+        suffix = path.suffix if path.is_file() else ""
+        
+        counter = 1
+        new_name = f"{stem}_copy{suffix}"
+        new_path = parent / new_name
+        while new_path.exists():
+            counter += 1
+            new_name = f"{stem}_copy{counter}{suffix}"
+            new_path = parent / new_name
+            
+        try:
+            if path.is_dir():
+                shutil.copytree(path, new_path)
+            else:
+                shutil.copy2(path, new_path)
+            rel_new = str(new_path.relative_to(self.root_path))
+            return {"success": True, "old_rel_path": rel_path, "new_rel_path": rel_new}
+        except Exception as e:
+            return {"error": f"Failed to duplicate '{rel_path}': {str(e)}"}
+
+    def format_code(self, rel_path: str, content: str = None) -> dict:
+        path = self._resolve(rel_path)
+        ext = path.suffix.lower()
+        if ext != ".py":
+            return {"error": f"Code formatting currently supported for Python (.py) files."}
+            
+        target_content = content
+        if target_content is None:
+            if not path.is_file():
+                return {"error": f"File not found: {rel_path}"}
+            with open(path, "r", encoding="utf-8") as f:
+                target_content = f.read()
+
+        # Try black, autopep8, or yapf if available
+        formatted = None
+        for cmd in [
+            [sys.executable, "-m", "black", "-q", "-"],
+            [sys.executable, "-m", "autopep8", "-"],
+        ]:
+            try:
+                res = subprocess.run(
+                    cmd,
+                    input=target_content,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+                if res.returncode == 0 and res.stdout:
+                    formatted = res.stdout
+                    break
+            except Exception:
+                continue
+
+        if formatted is not None:
+            return {"success": True, "formatted_content": formatted}
+        else:
+            return {"error": "No Python formatter (black/autopep8) installed in environment."}
 
     def run_script(self, rel_path: str) -> dict:
         path = self._resolve(rel_path)

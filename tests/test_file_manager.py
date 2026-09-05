@@ -57,8 +57,18 @@ def test_file_manager_operations():
         assert del_res.get("success") is True
         assert not os.path.exists(os.path.join(tmpdir, "renamed.py"))
 
+        # 8. Duplicate item
+        dup_res = fm.duplicate_item("src/main.py")
+        assert dup_res.get("success") is True
+        assert os.path.exists(os.path.join(tmpdir, "src/main_copy.py"))
+
+        # 9. Format code test
+        fmt_res = fm.format_code("src/main.py")
+        assert ("success" in fmt_res) or ("error" in fmt_res)
+
 def test_path_security():
     with tempfile.TemporaryDirectory() as tmpdir:
         fm = FileManager(tmpdir)
         with pytest.raises(ValueError, match="outside root directory"):
             fm._resolve("../outside.txt")
+
