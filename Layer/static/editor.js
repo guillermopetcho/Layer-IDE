@@ -747,6 +747,139 @@
       });
     }
 
+    // --- AI Copilot Elements & Logic ---
+    const aiBtn = wrapper.querySelector('.layer-btn-ai');
+    const aiDrawer = wrapper.querySelector('.layer-ai-drawer');
+    const aiCloseBtn = wrapper.querySelector('.layer-ai-close');
+    const aiLoadModelBtn = wrapper.querySelector('.layer-btn-load-model');
+    const aiBadge = wrapper.querySelector('.layer-ai-badge');
+    const aiChatHistory = wrapper.querySelector('.layer-ai-chat-history');
+    const aiPromptInput = wrapper.querySelector('.layer-ai-prompt');
+    const aiSendBtn = wrapper.querySelector('.layer-ai-send');
+    const aiExplainBtn = wrapper.querySelector('.layer-ai-btn-explain');
+    const aiRefactorBtn = wrapper.querySelector('.layer-ai-btn-refactor');
+    const aiFixBtn = wrapper.querySelector('.layer-ai-btn-fix');
+    const aiTestsBtn = wrapper.querySelector('.layer-ai-btn-tests');
+
+    function toggleAIDrawer() {
+      if (aiDrawer) {
+        const isHidden = aiDrawer.style.display === 'none';
+        aiDrawer.style.display = isHidden ? 'flex' : 'none';
+        if (isHidden) updateAIStatus();
+        if (monacoEditor) monacoEditor.layout();
+      }
+    }
+
+    function updateAIStatus() {
+      sendCommMessage('ai_get_status').then((res) => {
+        if (res && aiBadge) {
+          if (res.loaded) {
+            aiBadge.textContent = `Model: ${res.model_name} (${res.device.toUpperCase()})`;
+            aiBadge.style.backgroundColor = '#059669';
+            aiBadge.style.color = '#ffffff';
+          } else if (res.is_loading) {
+            aiBadge.textContent = 'Loading model...';
+            aiBadge.style.backgroundColor = '#d97706';
+          } else {
+            aiBadge.textContent = 'Model: Not Loaded';
+            aiBadge.style.backgroundColor = '#374151';
+          }
+        }
+      }).catch(() => {});
+    }
+
+    function sendAIPrompt(taskType = 'chat', customPrompt = '') {
+      const userPrompt = customPrompt || (aiPromptInput ? aiPromptInput.value.trim() : '');
+      if (!userPrompt && taskType === 'chat') return;
+
+      let codeContext = '';
+      if (monacoEditor) {
+        const selection = monacoEditor.getSelection();
+        if (selection && !selection.isEmpty()) {
+          codeContext = monacoEditor.getModel().getValueInRange(selection);
+        } else {
+          codeContext = monacoEditor.getValue();
+        }
+      }
+
+      appendAIMessage('user', userPrompt || taskType);
+      if (aiPromptInput) aiPromptInput.value = '';
+      statusTextEl.textContent = 'AI generating response...';
+
+      sendCommMessage('ai_instruct', {
+        prompt: userPrompt,
+        code_context: codeContext,
+        task_type: taskType
+      }).then((res) => {
+        if (res.error) {
+          appendAIMessage('system', 'Error: ' + res.error);
+          statusTextEl.textContent = 'AI Error';
+        } else if (res.response) {
+          appendAIMessage('assistant', res.response);
+          statusTextEl.textContent = 'AI response generated';
+        }
+      }).catch((err) => {
+        appendAIMessage('system', 'AI Request failed: ' + err.message);
+        statusTextEl.textContent = 'AI Failed';
+      });
+    }
+
+    function appendAIMessage(role, text) {
+      if (!aiChatHistory) return;
+      const msgEl = document.createElement('div');
+      msgEl.className = `layer-ai-msg layer-ai-msg-${role}`;
+      msgEl.textContent = text;
+      
+      if (role === 'assistant' && monacoEditor) {
+        const insertBtn = document.createElement('button');
+        insertBtn.className = 'layer-btn';
+        insertBtn.style.marginTop = '6px';
+        insertBtn.style.fontSize = '10px';
+        insertBtn.textContent = '📥 Insert into Editor';
+        insertBtn.addEventListener('click', () => {
+          const selection = monacoEditor.getSelection();
+          if (selection && !selection.isEmpty()) {
+            monacoEditor.executeEdits('ai', [{ range: selection, text: text, forceMoveMarkers: true }]);
+          } else {
+            monacoEditor.trigger('keyboard', 'type', { text: text });
+          }
+          showToast('Inserted AI output', 'success');
+        });
+        msgEl.appendChild(document.createElement('br'));
+        msgEl.appendChild(insertBtn);
+      }
+
+      aiChatHistory.appendChild(msgEl);
+      aiChatHistory.scrollTop = aiChatHistory.scrollHeight;
+    }
+
+    if (aiBtn) aiBtn.addEventListener('click', toggleAIDrawer);
+    if (aiCloseBtn) aiCloseBtn.addEventListener('click', toggleAIDrawer);
+    if (aiSendBtn) aiSendBtn.addEventListener('click', () => sendAIPrompt('chat'));
+    if (aiExplainBtn) aiExplainBtn.addEventListener('click', () => sendAIPrompt('explain'));
+    if (aiRefactorBtn) aiRefactorBtn.addEventListener('click', () => sendAIPrompt('refactor', 'Optimize and refactor code'));
+    if (aiFixBtn) aiFixBtn.addEventListener('click', () => sendAIPrompt('fix', 'Fix bugs in code'));
+    if (aiTestsBtn) aiTestsBtn.addEventListener('click', () => sendAIPrompt('generate_tests', 'Generate pytest unit tests'));
+
+    if (aiLoadModelBtn) {
+      aiLoadModelBtn.addEventListener('click', () => {
+        const modelName = prompt('Enter HuggingFace model name:', 'Qwen/Qwen2.5-Coder-1.5B-Instruct');
+        if (modelName) {
+          if (aiBadge) {
+            aiBadge.textContent = 'Loading ' + modelName + '...';
+            aiBadge.style.backgroundColor = '#d97706';
+          }
+          sendCommMessage('ai_load_model', { model_name: modelName }).then((res) => {
+            if (res.error) showToast(res.error, 'error');
+            else {
+              showToast('Loaded AI Model: ' + modelName, 'success');
+              updateAIStatus();
+            }
+          });
+        }
+      });
+    }
+
     // Initialize Monaco
     initMonaco();
   };

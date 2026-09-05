@@ -83,6 +83,22 @@ class Dash:
                 )
             elif action == "run_script":
                 response = self.file_manager.run_script(data.get("rel_path", ""))
+            elif action == "ai_get_status":
+                from Layer.ai_engine import ai_engine
+                response = ai_engine.get_status()
+            elif action == "ai_load_model":
+                from Layer.ai_engine import ai_engine
+                response = ai_engine.load_hf_model(
+                    data.get("model_name", "Qwen/Qwen2.5-Coder-1.5B-Instruct"),
+                    data.get("load_in_4bit", False)
+                )
+            elif action == "ai_instruct":
+                from Layer.ai_engine import ai_engine
+                response = ai_engine.instruct(
+                    data.get("prompt", ""),
+                    data.get("code_context", ""),
+                    data.get("task_type", "chat")
+                )
             else:
                 response = {"error": f"Unknown action: {action}"}
         except Exception as e:
@@ -146,6 +162,7 @@ class Dash:
                 <option value="hc-black">⚡ High Contrast</option>
               </select>
               <button class="layer-btn layer-btn-format" title="Format Python Code">✨ Format</button>
+              <button class="layer-btn layer-btn-ai" title="AI Code Copilot">🤖 AI Copilot</button>
               <button class="layer-btn layer-btn-save" title="Save file (Ctrl+S)">💾 Save</button>
               <button class="layer-btn layer-btn-success layer-btn-run" title="Run Python file (Ctrl+Enter)">▶ Run</button>
               <button class="layer-icon-btn layer-btn-fullscreen" title="Toggle Fullscreen">⛶</button>
@@ -210,6 +227,33 @@ class Dash:
                   </div>
                 </div>
                 <div class="layer-terminal-content"></div>
+              </div>
+            </div>
+
+            <!-- AI Copilot Drawer Panel -->
+            <div class="layer-ai-drawer" style="display: none;">
+              <div class="layer-ai-header">
+                <span>🤖 AI Code Copilot</span>
+                <button class="layer-icon-btn layer-ai-close">✕</button>
+              </div>
+              <div class="layer-ai-model-status">
+                <span class="layer-ai-badge">Model: Not Loaded</span>
+                <button class="layer-btn layer-btn-load-model" style="padding: 2px 6px; font-size: 10px;">Load Qwen 1.5B</button>
+              </div>
+              <div class="layer-ai-actions-bar">
+                <button class="layer-btn layer-ai-btn-explain">📝 Explain</button>
+                <button class="layer-btn layer-ai-btn-refactor">✨ Refactor</button>
+                <button class="layer-btn layer-ai-btn-fix">🐞 Fix Bug</button>
+                <button class="layer-btn layer-ai-btn-tests">🧪 Tests</button>
+              </div>
+              <div class="layer-ai-chat-history">
+                <div class="layer-ai-msg layer-ai-msg-system">
+                  Welcome to AI Copilot! Load a model (e.g. Qwen2.5-Coder) or type a prompt below to generate code.
+                </div>
+              </div>
+              <div class="layer-ai-input-box">
+                <textarea class="layer-ai-prompt" placeholder="Ask AI to generate or refactor code..."></textarea>
+                <button class="layer-btn layer-btn-primary layer-ai-send">Send</button>
               </div>
             </div>
           </div>
