@@ -7,6 +7,49 @@ from typing import Dict, Any, Optional
 
 logger = logging.getLogger("Layer.AIEngine")
 
+PRESET_MODELS = [
+    {
+        "id": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        "name": "⚡ Qwen 2.5 Coder 1.5B (Fast)",
+        "desc": "Lightweight, ultra-fast model for code completion on any GPU/CPU."
+    },
+    {
+        "id": "Qwen/Qwen2.5-Coder-7B-Instruct",
+        "name": "🚀 Qwen 2.5 Coder 7B (Recommended)",
+        "desc": "Highly capable code model for complex Python scripts."
+    },
+    {
+        "id": "Qwen/Qwen2.5-Coder-14B-Instruct",
+        "name": "🧠 Qwen 2.5 Coder 14B (4-bit GPU)",
+        "desc": "High accuracy model, auto 4-bit quantized."
+    },
+    {
+        "id": "Qwen/Qwen2.5-Coder-32B-Instruct",
+        "name": "🏆 Qwen 2.5 Coder 32B (4-bit Multi-GPU)",
+        "desc": "State-of-the-art code LLM, multi-GPU T4x2 ready."
+    },
+    {
+        "id": "deepseek-ai/DeepSeek-Coder-1.5B-instruct",
+        "name": "🐉 DeepSeek Coder 1.5B",
+        "desc": "DeepSeek specialized code instruct model."
+    },
+    {
+        "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
+        "name": "🐉 DeepSeek Coder 6.7B",
+        "desc": "DeepSeek 6.7B parameters code model."
+    },
+    {
+        "id": "bigcode/starcoder2-3b",
+        "name": "⭐ StarCoder 2 (3B)",
+        "desc": "BigCode StarCoder2 3B model."
+    },
+    {
+        "id": "codellama/CodeLlama-7b-Instruct-hf",
+        "name": "🦙 CodeLlama 7B Instruct",
+        "desc": "Meta CodeLlama 7B Instruct model."
+    }
+]
+
 class AIEngine:
     """
     AI Code Engine for Layer IDE.
@@ -32,6 +75,10 @@ class AIEngine:
         self.is_loading: bool = False
         self.load_error: Optional[str] = None
         self.load_lock = threading.Lock()
+
+    def get_available_models(self) -> list:
+        """Return pre-configured list of open-source code models."""
+        return PRESET_MODELS
 
     def get_status(self) -> Dict[str, Any]:
         """Return current AI model status."""

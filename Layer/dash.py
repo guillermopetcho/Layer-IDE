@@ -86,6 +86,9 @@ class Dash:
             elif action == "ai_get_status":
                 from Layer.ai_engine import ai_engine
                 response = ai_engine.get_status()
+            elif action == "ai_get_models":
+                from Layer.ai_engine import ai_engine
+                response = {"models": ai_engine.get_available_models()}
             elif action == "ai_load_model":
                 from Layer.ai_engine import ai_engine
                 response = ai_engine.load_hf_model(
@@ -238,7 +241,13 @@ class Dash:
               </div>
               <div class="layer-ai-model-status">
                 <span class="layer-ai-badge">Model: Not Loaded</span>
-                <button class="layer-btn layer-btn-load-model" style="padding: 2px 6px; font-size: 10px;">Load Qwen 1.5B</button>
+              </div>
+              <div class="layer-ai-model-hub" style="padding: 6px 10px; border-bottom: 1px solid var(--layer-border); display: flex; flex-direction: column; gap: 6px;">
+                <label style="font-size: 10px; color: var(--layer-text-muted); font-weight: 600;">HUGGINGFACE MODEL CATALOG:</label>
+                <select class="layer-ai-model-select" style="background: var(--layer-bg-dark); color: white; border: 1px solid var(--layer-border); padding: 4px; border-radius: 4px; font-size: 11px; width: 100%;">
+                  <!-- Options populated dynamically -->
+                </select>
+                <button class="layer-btn layer-btn-primary layer-btn-load-model" style="font-size: 11px; justify-content: center;">⚡ Load on GPU</button>
               </div>
               <div class="layer-ai-actions-bar">
                 <button class="layer-btn layer-ai-btn-explain">📝 Explain</button>

@@ -761,11 +761,37 @@
     const aiFixBtn = wrapper.querySelector('.layer-ai-btn-fix');
     const aiTestsBtn = wrapper.querySelector('.layer-ai-btn-tests');
 
+    const aiModelSelect = wrapper.querySelector('.layer-ai-model-select');
+
+    function populateModelHub() {
+      if (!aiModelSelect) return;
+      sendCommMessage('ai_get_models').then((res) => {
+        if (res && res.models) {
+          aiModelSelect.innerHTML = '';
+          res.models.forEach((m) => {
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.name;
+            opt.title = m.desc;
+            aiModelSelect.appendChild(opt);
+          });
+          // Add Custom Model option
+          const customOpt = document.createElement('option');
+          customOpt.value = 'custom';
+          customOpt.textContent = '➕ Custom HuggingFace Model...';
+          aiModelSelect.appendChild(customOpt);
+        }
+      }).catch(() => {});
+    }
+
     function toggleAIDrawer() {
       if (aiDrawer) {
         const isHidden = aiDrawer.style.display === 'none';
         aiDrawer.style.display = isHidden ? 'flex' : 'none';
-        if (isHidden) updateAIStatus();
+        if (isHidden) {
+          updateAIStatus();
+          populateModelHub();
+        }
         if (monacoEditor) monacoEditor.layout();
       }
     }
@@ -863,19 +889,24 @@
 
     if (aiLoadModelBtn) {
       aiLoadModelBtn.addEventListener('click', () => {
-        const modelName = prompt('Enter HuggingFace model name:', 'Qwen/Qwen2.5-Coder-1.5B-Instruct');
+        let modelName = aiModelSelect ? aiModelSelect.value : 'Qwen/Qwen2.5-Coder-1.5B-Instruct';
+        if (modelName === 'custom') {
+          modelName = prompt('Enter custom HuggingFace model repo ID:', 'Qwen/Qwen2.5-Coder-7B-Instruct');
+        }
         if (modelName) {
           if (aiBadge) {
-            aiBadge.textContent = 'Loading ' + modelName + '...';
+            aiBadge.textContent = 'Downloading & Loading ' + modelName + '...';
             aiBadge.style.backgroundColor = '#d97706';
           }
+          statusTextEl.textContent = 'Loading AI Model on GPU...';
           sendCommMessage('ai_load_model', { model_name: modelName }).then((res) => {
             if (res.error) showToast(res.error, 'error');
             else {
               showToast('Loaded AI Model: ' + modelName, 'success');
               updateAIStatus();
+              statusTextEl.textContent = 'AI Model Ready on GPU';
             }
-          });
+          }).catch((err) => showToast('Load error: ' + err.message, 'error'));
         }
       });
     }

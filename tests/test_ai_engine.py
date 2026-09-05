@@ -24,3 +24,12 @@ def test_ai_engine_api_setup():
 def test_package_load_model_export():
     assert hasattr(Layer, "load_model")
     assert hasattr(Layer, "ai_engine")
+
+def test_available_models_catalog():
+    models = ai_engine.get_available_models()
+    assert isinstance(models, list)
+    assert len(models) >= 5
+    model_ids = [m["id"] for m in models]
+    assert "Qwen/Qwen2.5-Coder-1.5B-Instruct" in model_ids
+    assert "Qwen/Qwen2.5-Coder-32B-Instruct" in model_ids
+
