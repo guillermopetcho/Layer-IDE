@@ -276,6 +276,9 @@
         runActiveFile();
       });
 
+      if (searchInput) searchInput.value = '';
+      populateModelHub();
+
       // Load File Explorer Tree
       loadTree('');
 

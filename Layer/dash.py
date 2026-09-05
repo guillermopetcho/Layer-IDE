@@ -145,6 +145,11 @@ class Dash:
 
         root_name = self.file_manager.root_path.name or str(self.file_manager.root_path)
 
+        from Layer.ai_engine import PRESET_MODELS
+        model_options = "\n".join(
+            [f'                  <option value="{m["id"]}" title="{m["desc"]}">{m["name"]}</option>' for m in PRESET_MODELS]
+        ) + '\n                  <option value="custom">➕ Custom HuggingFace Model...</option>'
+
         html_content = f"""
         <style>
         {css}
@@ -186,7 +191,7 @@ class Dash:
                 </div>
               </div>
               <div class="layer-search-container">
-                <input type="text" class="layer-search-input" placeholder="🔍 Filter files..." />
+                <input type="text" class="layer-search-input" placeholder="🔍 Filter files..." autocomplete="off" spellcheck="false" value="" />
               </div>
               <div class="layer-file-tree">
                 <!-- File Tree Items Dynamically Loaded -->
@@ -245,7 +250,7 @@ class Dash:
               <div class="layer-ai-model-hub" style="padding: 6px 10px; border-bottom: 1px solid var(--layer-border); display: flex; flex-direction: column; gap: 6px;">
                 <label style="font-size: 10px; color: var(--layer-text-muted); font-weight: 600;">HUGGINGFACE MODEL CATALOG:</label>
                 <select class="layer-ai-model-select" style="background: var(--layer-bg-dark); color: white; border: 1px solid var(--layer-border); padding: 4px; border-radius: 4px; font-size: 11px; width: 100%;">
-                  <!-- Options populated dynamically -->
+{model_options}
                 </select>
                 <button class="layer-btn layer-btn-primary layer-btn-load-model" style="font-size: 11px; justify-content: center;">⚡ Load on GPU</button>
               </div>
