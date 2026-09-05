@@ -15,6 +15,20 @@ def _read_asset(filename: str) -> str:
             return f.read()
     return ""
 
+KAGGLE_ENV_VARS = ("KAGGLE_KERNEL_RUN_TYPE", "KAGGLE_URL_BASE", "KAGGLE_DATA_PROXY_TOKEN")
+
+def _detect_kaggle_working_dir():
+    """Detect a live Kaggle kernel and return its working directory, or None.
+
+    Requires both a Kaggle-specific env var AND the actual mount to exist,
+    so this never misfires on a machine that merely happens to have a
+    '/kaggle/working' folder lying around outside of a real Kaggle kernel.
+    """
+    kaggle_working = Path("/kaggle/working")
+    if any(os.environ.get(var) for var in KAGGLE_ENV_VARS) and kaggle_working.is_dir():
+        return str(kaggle_working)
+    return None
+
 class Dash:
     """
     Layer.Dash: Interactive Code Editor IDE for Kaggle and Jupyter Notebooks.
@@ -34,6 +48,11 @@ class Dash:
         initial_file: str = None,
         display_inline: bool = False
     ):
+        if path == ".":
+            kaggle_working_dir = _detect_kaggle_working_dir()
+            if kaggle_working_dir:
+                path = kaggle_working_dir
+
         self.path = path
         self.height = height
         self.theme = theme
@@ -60,6 +79,12 @@ class Dash:
         try:
             if action == "list_dir":
                 response = self.file_manager.list_dir(data.get("rel_path", ""))
+            elif action == "list_tree":
+                response = self.file_manager.list_tree(
+                    data.get("rel_path", ""),
+                    data.get("max_depth", 8),
+                    data.get("max_entries", 3000),
+                )
             elif action == "read_file":
                 response = self.file_manager.read_file(data.get("rel_path", ""))
             elif action == "write_file":

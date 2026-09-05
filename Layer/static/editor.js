@@ -471,7 +471,7 @@
       populateModelHub();
 
       // Load File Explorer Tree regardless of which editor backend is active
-      loadTree('');
+      loadFullTree();
 
       if (initialFile) {
         openFile(initialFile);
@@ -523,7 +523,7 @@
       populateModelHub();
 
       // Load File Explorer Tree
-      loadTree('');
+      loadFullTree();
 
       if (initialFile) {
         openFile(initialFile);
@@ -544,15 +544,40 @@
     }
 
     // --- File Tree Renderer ---
-    function loadTree(relPath = '') {
-      sendCommMessage('list_dir', { rel_path: relPath })
+    // Loads the full recursive tree in one RPC call so the whole workspace
+    // (e.g. /kaggle/working) is visible expanded as soon as the IDE opens,
+    // instead of requiring the user to click into every folder manually.
+    function loadFullTree() {
+      sendCommMessage('list_tree', { rel_path: '' })
         .then((data) => {
           if (data.error) {
             showToast(data.error, 'error');
             return;
           }
-          if (relPath === '') {
-            currentTreeItems = data.items;
+          currentTreeItems = data.items;
+          renderTreeItems(data.items, treeEl);
+          if (data.truncated) {
+            showToast(
+              `Directorio muy grande: se muestran ${data.scanned_entries} elementos (algunas subcarpetas se cargarán al hacer click).`,
+              'info'
+            );
+          }
+        })
+        .catch((err) => showToast('Failed to load file tree: ' + err.message, 'error'));
+    }
+
+    // Kept for targeted single-level refreshes (e.g. re-fetching a lazily
+    // loaded subfolder that the recursive scan above had to skip).
+    function loadTree(relPath = '') {
+      if (relPath === '') {
+        loadFullTree();
+        return;
+      }
+      sendCommMessage('list_dir', { rel_path: relPath })
+        .then((data) => {
+          if (data.error) {
+            showToast(data.error, 'error');
+            return;
           }
           renderTreeItems(data.items, treeEl);
         })
@@ -586,6 +611,18 @@
         itemEl.appendChild(icon);
         itemEl.appendChild(label);
 
+        // Directories from the recursive list_tree scan already carry their
+        // children (possibly an empty array) — render them expanded right
+        // away instead of waiting for a click.
+        let subContainer = null;
+        if (item.is_dir && Array.isArray(item.children)) {
+          subContainer = document.createElement('div');
+          subContainer.className = 'layer-subtree';
+          subContainer.style.paddingLeft = '12px';
+          renderTreeItems(item.children, subContainer);
+          arrow.classList.add('expanded');
+        }
+
         // Click event
         itemEl.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -594,16 +631,23 @@
 
           if (item.is_dir) {
             arrow.classList.toggle('expanded');
-            let subContainer = itemEl.nextElementSibling;
-            if (subContainer && subContainer.classList.contains('layer-subtree')) {
+            if (subContainer) {
+              // Already rendered (recursive scan) — just show/hide it.
               subContainer.style.display = subContainer.style.display === 'none' ? 'block' : 'none';
+              return;
+            }
+            // Not preloaded (recursive scan hit its safety cap before this
+            // folder) — fall back to fetching this one level on demand.
+            let lazyContainer = itemEl.nextElementSibling;
+            if (lazyContainer && lazyContainer.classList.contains('layer-subtree')) {
+              lazyContainer.style.display = lazyContainer.style.display === 'none' ? 'block' : 'none';
             } else {
-              subContainer = document.createElement('div');
-              subContainer.className = 'layer-subtree';
-              subContainer.style.paddingLeft = '12px';
-              itemEl.after(subContainer);
+              lazyContainer = document.createElement('div');
+              lazyContainer.className = 'layer-subtree';
+              lazyContainer.style.paddingLeft = '12px';
+              itemEl.after(lazyContainer);
               sendCommMessage('list_dir', { rel_path: item.rel_path }).then((res) => {
-                renderTreeItems(res.items, subContainer);
+                renderTreeItems(res.items, lazyContainer);
               });
             }
           } else {
@@ -642,6 +686,7 @@
         });
 
         container.appendChild(itemEl);
+        if (subContainer) container.appendChild(subContainer);
       });
     }
 

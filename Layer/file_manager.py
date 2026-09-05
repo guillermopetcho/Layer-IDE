@@ -166,6 +166,94 @@ class FileManager:
             "initial_file": str(self.target_file.relative_to(self.root_path)) if self.target_file else None,
         }
 
+    def list_tree(self, rel_path: str = "", max_depth: int = 8, max_entries: int = 3000) -> dict:
+        """Recursively scan a directory and return its full nested structure.
+
+        Bounded by max_depth/max_entries so a huge tree (e.g. a dataset
+        copied into the workspace) can't hang the kernel or overwhelm the
+        UI: scanning stops early once the cap is hit and `truncated` is
+        set, leaving any not-yet-scanned folders without a `children` key
+        so the frontend can lazy-load them on demand like before.
+        """
+        try:
+            root = self._resolve(rel_path)
+        except Exception as e:
+            return {"error": f"Invalid path '{rel_path}': {str(e)}"}
+
+        if not root.exists():
+            return {"error": f"Path not found: {rel_path}"}
+        if root.is_file():
+            return {"error": f"Not a directory: {rel_path}"}
+
+        real_root = Path(os.path.realpath(self.root_path))
+        state = {"count": 0, "truncated": False}
+
+        def scan(dir_path: Path, depth: int) -> list:
+            nodes = []
+            if state["truncated"]:
+                return nodes
+            try:
+                entries = list(os.scandir(dir_path))
+            except Exception:
+                return nodes
+
+            for entry in sorted(entries, key=lambda e: (not self._safe_is_dir(e), e.name.lower())):
+                if entry.name == ".git":
+                    continue
+                if state["count"] >= max_entries:
+                    state["truncated"] = True
+                    break
+
+                is_directory = self._safe_is_dir(entry)
+                try:
+                    st = entry.stat()
+                    size = st.st_size if not is_directory else 0
+                    mtime = st.st_mtime
+                except Exception:
+                    size = 0
+                    mtime = 0
+
+                try:
+                    entry_real = Path(os.path.realpath(entry.path))
+                    rel_item_path = str(entry_real.relative_to(real_root))
+                except Exception:
+                    rel_item_path = entry.name
+
+                node = {
+                    "name": entry.name,
+                    "rel_path": rel_item_path,
+                    "is_dir": is_directory,
+                    "size": size,
+                    "mtime": mtime,
+                    "language": get_language_for_file(entry.name) if not is_directory else "folder",
+                }
+                state["count"] += 1
+
+                if is_directory and depth < max_depth:
+                    node["children"] = scan(Path(entry.path), depth + 1)
+
+                nodes.append(node)
+
+            return nodes
+
+        items = scan(root, 0)
+
+        try:
+            root_rel = str(root.relative_to(self.root_path))
+            if root_rel == ".":
+                root_rel = ""
+        except ValueError:
+            root_rel = str(root)
+
+        return {
+            "root_name": self.root_path.name or str(self.root_path),
+            "current_rel_path": root_rel,
+            "items": items,
+            "truncated": state["truncated"],
+            "scanned_entries": state["count"],
+            "initial_file": str(self.target_file.relative_to(self.root_path)) if self.target_file else None,
+        }
+
     def read_file(self, rel_path: str) -> dict:
         path = self._resolve(rel_path)
         if not path.is_file():

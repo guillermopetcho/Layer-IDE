@@ -72,3 +72,34 @@ def test_path_security():
         with pytest.raises(ValueError, match="outside root directory"):
             fm._resolve("../outside.txt")
 
+def test_list_tree_recursive():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fm = FileManager(tmpdir)
+        fm.create_dir("data/train")
+        fm.create_file("data/train/sample.csv")
+        fm.create_file("notebook.ipynb")
+
+        tree = fm.list_tree("")
+        assert "items" in tree
+        assert tree["truncated"] is False
+
+        names = [item["name"] for item in tree["items"]]
+        assert "data" in names
+        assert "notebook.ipynb" in names
+
+        data_node = next(item for item in tree["items"] if item["name"] == "data")
+        assert data_node["is_dir"] is True
+        assert "children" in data_node
+        train_node = next(item for item in data_node["children"] if item["name"] == "train")
+        assert "sample.csv" in [c["name"] for c in train_node["children"]]
+
+def test_list_tree_respects_max_entries():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fm = FileManager(tmpdir)
+        for i in range(10):
+            fm.create_file(f"file_{i}.txt")
+
+        tree = fm.list_tree("", max_entries=5)
+        assert tree["truncated"] is True
+        assert tree["scanned_entries"] <= 5
+
