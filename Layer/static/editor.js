@@ -4,6 +4,7 @@
     const commTarget = config.commTarget;
     const initialRoot = config.rootPath;
     const initialFile = config.initialFile;
+    const kaggleDetected = !!config.kaggleDetected;
 
     const wrapper = document.getElementById('layer-dash-' + instanceId);
     if (!wrapper) return;
@@ -18,10 +19,13 @@
     const tabsEl = wrapper.querySelector('.layer-tabs');
     const editorContainer = wrapper.querySelector('.layer-editor-container');
     const emptyState = wrapper.querySelector('.layer-empty-state');
+    const emptyBootEl = wrapper.querySelector('.layer-empty-boot');
+    const emptyReadyEl = wrapper.querySelector('.layer-empty-ready');
     const breadcrumbsEl = wrapper.querySelector('.layer-breadcrumbs');
     const statusTextEl = wrapper.querySelector('.layer-status-text');
     const statusLangEl = wrapper.querySelector('.layer-status-lang');
     const cursorPosEl = wrapper.querySelector('.layer-cursor-pos');
+    const connDotEl = wrapper.querySelector('.layer-conn-dot');
     const terminalEl = wrapper.querySelector('.layer-terminal');
     const terminalContentEl = wrapper.querySelector('.layer-terminal-content');
     const execTimerEl = wrapper.querySelector('.layer-exec-timer');
@@ -38,6 +42,27 @@
     const newFileBtn = wrapper.querySelector('.layer-btn-new-file');
     const newFolderBtn = wrapper.querySelector('.layer-btn-new-folder');
     const refreshBtn = wrapper.querySelector('.layer-btn-refresh');
+
+    // Reflect the auto-detected Kaggle root in the header so it's obvious
+    // *why* the IDE opened where it did, instead of it looking arbitrary.
+    if (kaggleDetected && breadcrumbsEl) {
+      const badge = document.createElement('span');
+      badge.className = 'layer-kaggle-badge';
+      badge.textContent = '🅺 Kaggle';
+      badge.title = 'Raíz detectada automáticamente: /kaggle/working';
+      breadcrumbsEl.after(badge);
+    }
+
+    // --- Theming ---
+    // The theme selector used to only restyle Monaco's own canvas, leaving
+    // the rest of the chrome (header, sidebar, tabs, status bar) stuck in
+    // dark mode. Toggling data-theme here drives the CSS variables that
+    // color the whole widget, in addition to Monaco's own theme.
+    const THEME_MAP = { 'vs-dark': 'dark', 'vs': 'light', 'hc-black': 'contrast' };
+    function applyTheme(themeValue) {
+      wrapper.setAttribute('data-theme', THEME_MAP[themeValue] || 'dark');
+      if (window.monaco) monaco.editor.setTheme(themeValue);
+    }
 
     let monacoEditor = null;
     let comm = null;
@@ -100,8 +125,77 @@
       return null;
     }
 
+    // Runs only when every known comm mechanism has failed, to capture
+    // *why* in the browser console: whether each accessible frame is same-
+    // origin at all, and which (if any) global names on it look related to
+    // a notebook kernel. This environment isn't reproducible outside a real
+    // notebook session, so this is how we find out what a given platform
+    // (e.g. Kaggle's own notebook frontend) actually exposes, instead of
+    // guessing blindly at global names to check for.
+    function diagnoseCommEnvironment() {
+      const labels = ['window (this iframe)', 'window.parent', 'window.top'];
+      const winRefs = [
+        window,
+        (function () { try { return window.parent; } catch (e) { return null; } })(),
+        (function () { try { return window.top; } catch (e) { return null; } })(),
+      ];
+
+      const report = winRefs.map((win, idx) => {
+        const label = labels[idx];
+        if (!win) return { frame: label, reachable: false };
+        if (win === window && idx > 0) return { frame: label, sameAs: 'window' };
+
+        let crossOrigin = false;
+        try {
+          void win.location.href; // throws for a cross-origin window
+        } catch (e) {
+          crossOrigin = true;
+        }
+
+        let matchingGlobals = [];
+        if (!crossOrigin) {
+          try {
+            matchingGlobals = Object.keys(win).filter((k) =>
+              /jupyter|ipython|colab|kernel|comm|kaggle|widget/i.test(k)
+            );
+          } catch (e) {
+            matchingGlobals = ['<error enumerating: ' + e.message + '>'];
+          }
+        }
+
+        return { frame: label, reachable: true, crossOrigin, matchingGlobals };
+      });
+
+      console.warn(
+        'Layer IDE: no comm channel found. Diagnostic report (please copy this if reporting an issue):\n' +
+          JSON.stringify(report, null, 2)
+      );
+      return report;
+    }
+
+    // --- Connection Status Indicator ---
+    // Reflects whether the last RPC round-trip actually succeeded, so a
+    // dead comm channel (a real, recurring pain point on Kaggle) shows up
+    // as a visible red dot in the status bar instead of only surfacing
+    // through individual error toasts.
+    function setConnectionStatus(connected) {
+      if (!connDotEl) return;
+      connDotEl.classList.toggle('connected', connected === true);
+      connDotEl.classList.toggle('disconnected', connected === false);
+      connDotEl.title = connected
+        ? 'Conectado al kernel'
+        : 'Sin canal de comunicación con el kernel';
+    }
+
     // --- Communication Bridge ---
     function sendCommMessage(action, payload = {}) {
+      return sendCommMessageRaw(action, payload).then(
+        (res) => { setConnectionStatus(true); return res; },
+        (err) => { setConnectionStatus(false); throw err; }
+      );
+    }
+
+    function sendCommMessageRaw(action, payload = {}) {
       return new Promise((resolve, reject) => {
         const msgData = { action: action, ...payload };
 
@@ -231,23 +325,54 @@
         }
 
         // 5. Direct error if all connection methods failed
-        showToast('No notebook comm channel or kernel connection detected.', 'error');
+        diagnoseCommEnvironment();
+        showToast('No notebook comm channel or kernel connection detected. Ver la consola del navegador (F12) para el diagnóstico.', 'error');
         reject(new Error('No notebook comm channel available.'));
       });
     }
 
     // --- Toast Notifications ---
+    let toastContainer = null;
+    const TOAST_ICONS = { success: '✓', error: '✕', info: 'ℹ' };
+
     function showToast(message, type = 'info') {
+      if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.className = 'layer-toast-container';
+        wrapper.appendChild(toastContainer);
+      }
+
       const toast = document.createElement('div');
-      toast.className = 'layer-toast';
-      if (type === 'error') toast.style.borderColor = 'var(--layer-danger)';
-      if (type === 'success') toast.style.borderColor = 'var(--layer-success)';
-      toast.textContent = message;
-      wrapper.appendChild(toast);
+      toast.className = 'layer-toast layer-toast-' + type;
+
+      const iconEl = document.createElement('span');
+      iconEl.className = 'layer-toast-icon';
+      iconEl.textContent = TOAST_ICONS[type] || TOAST_ICONS.info;
+
+      const textEl = document.createElement('span');
+      textEl.textContent = message;
+
+      toast.appendChild(iconEl);
+      toast.appendChild(textEl);
+      toastContainer.appendChild(toast);
+
+      requestAnimationFrame(() => toast.classList.add('visible'));
+
       setTimeout(() => {
-        toast.style.opacity = '0';
+        toast.classList.remove('visible');
         setTimeout(() => toast.remove(), 300);
-      }, 3000);
+      }, 4000);
+    }
+
+    // Switches the empty-state overlay from its "Cargando editor..." boot
+    // spinner to the normal "select a file" copy, then hides the whole
+    // overlay — called once Monaco (or the fallback editor) is actually
+    // usable. The "ready" copy stays wired up so closeTab() can still show
+    // it again later when the user closes their last open tab.
+    function markEditorReady() {
+      if (emptyBootEl) emptyBootEl.style.display = 'none';
+      if (emptyReadyEl) emptyReadyEl.style.display = 'flex';
+      emptyState.style.display = 'none';
     }
 
     // --- Resizable Drag Splitters ---
@@ -399,15 +524,37 @@
     // AI copilot keep working without syntax highlighting.
     function setupFallbackEditor() {
       usingMonaco = false;
-      emptyState.style.display = 'none';
+      markEditorReady();
+
+      const wrap = document.createElement('div');
+      wrap.className = 'layer-fallback-wrap';
+
+      const gutter = document.createElement('div');
+      gutter.className = 'layer-fallback-gutter';
+      gutter.textContent = '1';
 
       fallbackTextarea = document.createElement('textarea');
       fallbackTextarea.className = 'layer-fallback-editor';
       fallbackTextarea.spellcheck = false;
       fallbackTextarea.setAttribute('autocomplete', 'off');
-      editorContainer.appendChild(fallbackTextarea);
+
+      wrap.appendChild(gutter);
+      wrap.appendChild(fallbackTextarea);
+      editorContainer.appendChild(wrap);
+
+      function syncGutter() {
+        const lineCount = fallbackTextarea.value.split('\n').length;
+        let lines = '';
+        for (let i = 1; i <= lineCount; i++) lines += i + '\n';
+        gutter.textContent = lines;
+      }
+
+      fallbackTextarea.addEventListener('scroll', () => {
+        gutter.scrollTop = fallbackTextarea.scrollTop;
+      });
 
       fallbackTextarea.addEventListener('input', () => {
+        syncGutter();
         if (fallbackCurrentModel) fallbackCurrentModel.value = fallbackTextarea.value;
         if (activeTabPath) {
           const tab = openTabs.find((t) => t.rel_path === activeTabPath);
@@ -431,12 +578,13 @@
 
       monacoEditor = {
         getValue: () => fallbackTextarea.value,
-        setValue: (v) => { fallbackTextarea.value = v || ''; },
+        setValue: (v) => { fallbackTextarea.value = v || ''; syncGutter(); },
         layout: () => {},
-        getDomNode: () => fallbackTextarea,
+        getDomNode: () => wrap,
         setModel: (modelLike) => {
           fallbackCurrentModel = modelLike || { value: '' };
           fallbackTextarea.value = fallbackCurrentModel.value || '';
+          syncGutter();
         },
         getModel: () => ({
           getValueInRange: () => fallbackTextarea.value.substring(fallbackTextarea.selectionStart, fallbackTextarea.selectionEnd),
@@ -479,7 +627,7 @@
     }
 
     function setupEditorInstance() {
-      emptyState.style.display = 'none';
+      markEditorReady();
       monacoEditor = monaco.editor.create(editorContainer, {
         value: '',
         language: 'python',
@@ -587,7 +735,7 @@
     function renderTreeItems(items, container) {
       container.innerHTML = '';
       if (!items || items.length === 0) {
-        container.innerHTML = '<div style="padding:10px; font-size:12px; color:var(--layer-text-muted);">Empty folder</div>';
+        container.innerHTML = '<div class="layer-tree-empty"><span>📭</span><span>Empty folder</span></div>';
         return;
       }
 
@@ -991,10 +1139,8 @@
     if (clearTermBtn) clearTermBtn.addEventListener('click', () => { terminalContentEl.innerHTML = ''; });
 
     if (themeSelect) {
-      themeSelect.addEventListener('change', (e) => {
-        const theme = e.target.value;
-        if (window.monaco) monaco.editor.setTheme(theme);
-      });
+      themeSelect.addEventListener('change', (e) => applyTheme(e.target.value));
+      applyTheme(themeSelect.value);
     }
 
     if (fullscreenBtn) {

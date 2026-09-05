@@ -187,6 +187,7 @@ class Dash:
         js = _read_asset("editor.js")
 
         root_name = self.file_manager.root_path.name or str(self.file_manager.root_path)
+        kaggle_detected = str(self.path) == "/kaggle/working"
 
         from Layer.ai_engine import PRESET_MODELS
         model_options = "\n".join(
@@ -254,10 +255,16 @@ class Dash:
               <!-- Editor Container -->
               <div class="layer-editor-container">
                 <div class="layer-empty-state">
-                  <div style="font-size: 36px; margin-bottom: 4px;">⚡ Layer IDE</div>
-                  <div style="font-size: 14px; font-weight: 500;">Select a file from the explorer to begin editing</div>
-                  <div style="font-size: 11px; opacity: 0.7; margin-top: 6px;">
-                    Shortcuts: <kbd>Ctrl+S</kbd> Save | <kbd>Ctrl+Enter</kbd> Run | <kbd>Right-Click</kbd> Context Menu
+                  <div class="layer-empty-boot">
+                    <div class="layer-spinner"></div>
+                    <div style="font-size: 13px; font-weight: 500; margin-top: 8px;">Cargando editor...</div>
+                  </div>
+                  <div class="layer-empty-ready" style="display: none;">
+                    <div style="font-size: 36px; margin-bottom: 4px;">⚡ Layer IDE</div>
+                    <div style="font-size: 14px; font-weight: 500;">Select a file from the explorer to begin editing</div>
+                    <div style="font-size: 11px; opacity: 0.7; margin-top: 6px;">
+                      Shortcuts: <kbd>Ctrl+S</kbd> Save | <kbd>Ctrl+Enter</kbd> Run | <kbd>Right-Click</kbd> Context Menu
+                    </div>
                   </div>
                 </div>
               </div>
@@ -317,11 +324,12 @@ class Dash:
 
           <!-- Bottom Status Bar -->
           <div class="layer-statusbar">
-            <div style="display: flex; gap: 12px; align-items: center;">
+            <div class="layer-statusbar-group">
+              <span class="layer-conn-dot" title="Estado de conexión con el kernel"></span>
               <span class="layer-status-text">Ready</span>
               <span class="layer-status-lang" style="opacity: 0.8; font-size: 10px;">python</span>
             </div>
-            <div style="display: flex; gap: 12px; align-items: center;">
+            <div class="layer-statusbar-group">
               <span class="layer-cursor-pos">Ln 1, Col 1</span>
               <span class="layer-status-encoding">UTF-8</span>
             </div>
@@ -359,7 +367,8 @@ class Dash:
                     instanceId: "{self.instance_id}",
                     commTarget: "{self.comm_target}",
                     rootPath: "{self.file_manager.root_path}",
-                    initialFile: {json.dumps(self.initial_file)}
+                    initialFile: {json.dumps(self.initial_file)},
+                    kaggleDetected: {json.dumps(kaggle_detected)}
                 }});
             }}
         }})();
