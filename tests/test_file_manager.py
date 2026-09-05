@@ -68,7 +68,7 @@ def test_file_manager_operations():
 
 def test_path_security():
     with tempfile.TemporaryDirectory() as tmpdir:
-        fm = FileManager(tmpdir)
+        fm = FileManager(tmpdir, allow_outside=False)
         with pytest.raises(ValueError, match="outside root directory"):
             fm._resolve("../outside.txt")
 

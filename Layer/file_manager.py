@@ -49,39 +49,54 @@ def get_language_for_file(filename: str) -> str:
     return LANGUAGE_MAP.get(ext, "plaintext")
 
 class FileManager:
-    def __init__(self, root_path: str):
+    def __init__(self, root_path: str, allow_outside: bool = True):
         self.root_path = Path(root_path).resolve()
+        self.allow_outside = allow_outside
         if self.root_path.is_file():
             self.target_file = self.root_path
             self.root_path = self.root_path.parent
         else:
             self.target_file = None
 
+    def _safe_is_dir(self, entry) -> bool:
+        try:
+            return entry.is_dir(follow_symlinks=True)
+        except Exception:
+            return False
+
     def _resolve(self, rel_path: str) -> Path:
         if not rel_path or rel_path == ".":
             return self.root_path
 
         p = Path(rel_path)
-        if p.is_absolute():
-            try:
-                p = p.relative_to(self.root_path)
-            except ValueError:
+        # 1. If rel_path is an absolute path on disk (e.g. /kaggle/working/file.py), return it directly
+        if p.is_absolute() and p.exists():
+            target = p.resolve()
+        else:
+            if p.is_absolute():
                 try:
-                    p = p.relative_to(Path(os.path.realpath(self.root_path)))
+                    p = p.relative_to(self.root_path)
                 except ValueError:
-                    pass
+                    try:
+                        p = p.relative_to(Path(os.path.realpath(self.root_path)))
+                    except ValueError:
+                        pass
+            target = (self.root_path / p).resolve()
 
-        target = (self.root_path / p).resolve()
+        if not self.allow_outside:
+            real_root = os.path.realpath(self.root_path)
+            real_target = os.path.realpath(target)
+            if not (real_target == real_root or real_target.startswith(real_root + os.sep)):
+                raise ValueError(f"Access denied: path '{rel_path}' is outside root directory '{self.root_path}'.")
 
-        real_root = os.path.realpath(self.root_path)
-        real_target = os.path.realpath(target)
-
-        if not (real_target == real_root or real_target.startswith(real_root + os.sep)):
-            raise ValueError(f"Access denied: path '{rel_path}' is outside root directory '{self.root_path}'.")
         return target
 
     def list_dir(self, rel_path: str = "") -> dict:
-        path = self._resolve(rel_path)
+        try:
+            path = self._resolve(rel_path)
+        except Exception as e:
+            return {"error": f"Invalid path '{rel_path}': {str(e)}"}
+
         if not path.exists():
             return {"error": f"Path not found: {rel_path}"}
 
@@ -90,47 +105,59 @@ class FileManager:
                 "name": path.name,
                 "rel_path": rel_path or path.name,
                 "is_dir": False,
-                "size": path.stat().st_size,
-                "mtime": path.stat().st_mtime,
+                "size": path.stat().st_size if path.exists() else 0,
+                "mtime": path.stat().st_mtime if path.exists() else 0,
                 "language": get_language_for_file(path.name),
             }
 
         real_root = Path(os.path.realpath(self.root_path))
         items = []
         try:
-            for entry in sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())):
-                # Ignore hidden VCS files like .git
-                if entry.name == ".git":
-                    continue
-
-                entry_real = Path(os.path.realpath(entry.path))
-                try:
-                    rel_item_path = str(entry_real.relative_to(real_root))
-                except ValueError:
-                    try:
-                        rel_item_path = str(Path(entry.path).relative_to(self.root_path))
-                    except ValueError:
-                        clean_rel = rel_path.strip("/") if rel_path and rel_path != "." else ""
-                        rel_item_path = f"{clean_rel}/{entry.name}" if clean_rel else entry.name
-
-                is_directory = entry.is_dir()
-                items.append({
-                    "name": entry.name,
-                    "rel_path": rel_item_path,
-                    "is_dir": is_directory,
-                    "size": entry.stat().st_size if not is_directory else 0,
-                    "mtime": entry.stat().st_mtime,
-                    "language": get_language_for_file(entry.name) if not is_directory else "folder",
-                })
+            entries = list(os.scandir(path))
         except Exception as e:
-            return {"error": str(e)}
+            return {"error": f"Cannot scan directory '{path}': {str(e)}"}
+
+        for entry in sorted(entries, key=lambda e: (not self._safe_is_dir(e), e.name.lower())):
+            # Ignore hidden VCS files like .git
+            if entry.name == ".git":
+                continue
+
+            is_directory = self._safe_is_dir(entry)
+
+            try:
+                st = entry.stat()
+                size = st.st_size if not is_directory else 0
+                mtime = st.st_mtime
+            except Exception:
+                size = 0
+                mtime = 0
+
+            # Determine relative path safely
+            try:
+                entry_real = Path(os.path.realpath(entry.path))
+                rel_item_path = str(entry_real.relative_to(real_root))
+            except Exception:
+                try:
+                    rel_item_path = str(Path(entry.path).relative_to(self.root_path))
+                except Exception:
+                    clean_rel = rel_path.strip("/") if rel_path and rel_path != "." else ""
+                    rel_item_path = f"{clean_rel}/{entry.name}" if clean_rel else entry.name
+
+            items.append({
+                "name": entry.name,
+                "rel_path": rel_item_path,
+                "is_dir": is_directory,
+                "size": size,
+                "mtime": mtime,
+                "language": get_language_for_file(entry.name) if not is_directory else "folder",
+            })
 
         try:
             root_rel = str(path.relative_to(self.root_path))
             if root_rel == ".":
                 root_rel = ""
         except ValueError:
-            root_rel = ""
+            root_rel = str(path)
 
         return {
             "root_name": self.root_path.name or str(self.root_path),
