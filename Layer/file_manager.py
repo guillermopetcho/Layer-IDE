@@ -60,10 +60,24 @@ class FileManager:
     def _resolve(self, rel_path: str) -> Path:
         if not rel_path or rel_path == ".":
             return self.root_path
-        target = (self.root_path / rel_path).resolve()
-        # Security check: ensure path stays within root_path unless explicitly disabled
-        if not str(target).startswith(str(self.root_path)):
-            raise ValueError(f"Access denied: path '{rel_path}' is outside root directory.")
+
+        p = Path(rel_path)
+        if p.is_absolute():
+            try:
+                p = p.relative_to(self.root_path)
+            except ValueError:
+                try:
+                    p = p.relative_to(Path(os.path.realpath(self.root_path)))
+                except ValueError:
+                    pass
+
+        target = (self.root_path / p).resolve()
+
+        real_root = os.path.realpath(self.root_path)
+        real_target = os.path.realpath(target)
+
+        if not (real_target == real_root or real_target.startswith(real_root + os.sep)):
+            raise ValueError(f"Access denied: path '{rel_path}' is outside root directory '{self.root_path}'.")
         return target
 
     def list_dir(self, rel_path: str = "") -> dict:
@@ -81,18 +95,23 @@ class FileManager:
                 "language": get_language_for_file(path.name),
             }
 
+        real_root = Path(os.path.realpath(self.root_path))
         items = []
         try:
             for entry in sorted(os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())):
                 # Ignore hidden VCS files like .git
                 if entry.name == ".git":
                     continue
-                
-                entry_path = Path(entry.path)
+
+                entry_real = Path(os.path.realpath(entry.path))
                 try:
-                    rel_item_path = str(entry_path.relative_to(self.root_path))
+                    rel_item_path = str(entry_real.relative_to(real_root))
                 except ValueError:
-                    rel_item_path = entry.name
+                    try:
+                        rel_item_path = str(Path(entry.path).relative_to(self.root_path))
+                    except ValueError:
+                        clean_rel = rel_path.strip("/") if rel_path and rel_path != "." else ""
+                        rel_item_path = f"{clean_rel}/{entry.name}" if clean_rel else entry.name
 
                 is_directory = entry.is_dir()
                 items.append({
