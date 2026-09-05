@@ -37,6 +37,9 @@
     const helpBtn = wrapper.querySelector('.layer-btn-help');
     const helpModal = wrapper.querySelector('.layer-help-modal');
     const helpModalClose = wrapper.querySelector('.layer-help-modal .layer-modal-close');
+    const diagnosticModal = wrapper.querySelector('.layer-diagnostic-modal');
+    const diagnosticContent = wrapper.querySelector('.layer-diagnostic-content');
+    const diagnosticCloseBtn = wrapper.querySelector('.layer-diagnostic-close');
     const themeSelect = wrapper.querySelector('.layer-theme-select');
     const contextMenuEl = wrapper.querySelector('.layer-context-menu');
     const newFileBtn = wrapper.querySelector('.layer-btn-new-file');
@@ -166,11 +169,27 @@
         return { frame: label, reachable: true, crossOrigin, matchingGlobals };
       });
 
+      const reportText = JSON.stringify(report, null, 2);
       console.warn(
         'Layer IDE: no comm channel found. Diagnostic report (please copy this if reporting an issue):\n' +
-          JSON.stringify(report, null, 2)
+          reportText
       );
+
+      // Surface the same report directly in the IDE, since opening the
+      // browser console from inside a notebook's (possibly nested) output
+      // iframe is often more friction than it's worth for the user.
+      if (diagnosticContent && diagnosticModal) {
+        diagnosticContent.textContent = reportText;
+        diagnosticModal.style.display = 'flex';
+      }
+
       return report;
+    }
+
+    if (diagnosticCloseBtn && diagnosticModal) {
+      diagnosticCloseBtn.addEventListener('click', () => {
+        diagnosticModal.style.display = 'none';
+      });
     }
 
     // --- Connection Status Indicator ---

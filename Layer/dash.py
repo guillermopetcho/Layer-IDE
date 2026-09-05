@@ -187,7 +187,10 @@ class Dash:
         js = _read_asset("editor.js")
 
         root_name = self.file_manager.root_path.name or str(self.file_manager.root_path)
-        kaggle_detected = str(self.path) == "/kaggle/working"
+        # Compare against the resolved root (not the raw `path` argument) so
+        # this doesn't misfire on a trailing slash or a relative path that
+        # happens to resolve to the same real directory.
+        kaggle_detected = str(self.file_manager.root_path) == "/kaggle/working"
 
         from Layer.ai_engine import PRESET_MODELS
         model_options = "\n".join(
@@ -337,6 +340,22 @@ class Dash:
 
           <!-- Context Menu -->
           <div class="layer-context-menu" style="display: none;"></div>
+
+          <!-- Connection Diagnostic Modal (shown automatically if no comm channel is found) -->
+          <div class="layer-modal layer-diagnostic-modal" style="display: none;">
+            <div class="layer-modal-content" style="width: 560px;">
+              <div class="layer-modal-header">
+                <span>⚠️ Diagnóstico de Conexión</span>
+                <button class="layer-icon-btn layer-diagnostic-close">✕</button>
+              </div>
+              <div class="layer-modal-body">
+                <p style="font-size: 12px; margin-bottom: 8px; color: var(--layer-text-muted);">
+                  No se pudo conectar con el kernel del notebook. Seleccioná y copiá este texto para compartirlo y diagnosticar la causa:
+                </p>
+                <pre class="layer-diagnostic-content"></pre>
+              </div>
+            </div>
+          </div>
 
           <!-- Help Modal -->
           <div class="layer-modal layer-help-modal" style="display: none;">
