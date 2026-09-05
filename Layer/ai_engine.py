@@ -44,8 +44,13 @@ class AIEngine:
             "error": self.load_error
         }
 
-    def load_hf_model(self, model_name: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct", load_in_4bit: bool = False) -> Dict[str, Any]:
-        """Load a Hugging Face Causal LM model asynchronously or synchronously."""
+    def load_hf_model(
+        self,
+        model_name: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+        load_in_4bit: bool = False,
+        load_in_8bit: bool = False
+    ) -> Dict[str, Any]:
+        """Load a Hugging Face Causal LM model (supports 1.5B up to 32B/27B models with 4bit/8bit quantization)."""
         with self.load_lock:
             self.is_loading = True
             self.load_error = None
@@ -58,20 +63,32 @@ class AIEngine:
                 logger.info(f"Loading HF model '{model_name}' on {self.device}...")
 
                 tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-                
-                kwargs = {}
+
+                # Auto-enable 4-bit for large models (14B, 27B, 32B, 70B) if GPU is available unless overridden
+                is_large_model = any(size in model_name for size in ["14B", "14b", "27B", "27b", "32B", "32b", "70B", "70b"])
+                if is_large_model and self.device == "cuda":
+                    load_in_4bit = True
+
+                kwargs = {"low_cpu_mem_usage": True}
                 if self.device == "cuda":
                     kwargs["torch_dtype"] = torch.float16
                     kwargs["device_map"] = "auto"
                 else:
                     kwargs["torch_dtype"] = torch.float32
 
-                if load_in_4bit:
+                if load_in_4bit or load_in_8bit:
                     try:
                         from transformers import BitsAndBytesConfig
-                        kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
+                        if load_in_4bit:
+                            kwargs["quantization_config"] = BitsAndBytesConfig(
+                                load_in_4bit=True,
+                                bnb_4bit_compute_dtype=torch.float16,
+                                bnb_4bit_quant_type="nf4"
+                            )
+                        elif load_in_8bit:
+                            kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True)
                     except ImportError:
-                        pass
+                        logger.warning("bitsandbytes not installed. Install with `pip install bitsandbytes` for 4-bit quantization.")
 
                 model = AutoModelForCausalLM.from_pretrained(model_name, trust_remote_code=True, **kwargs)
 
