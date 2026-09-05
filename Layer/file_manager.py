@@ -185,16 +185,20 @@ class FileManager:
         if root.is_file():
             return {"error": f"Not a directory: {rel_path}"}
 
+        # Scan the requested root eagerly so a real failure here (permissions,
+        # a broken mount, etc.) surfaces as a visible error instead of being
+        # swallowed into a silently empty tree further down.
+        try:
+            root_entries = list(os.scandir(root))
+        except Exception as e:
+            return {"error": f"Cannot scan directory '{root}': {str(e)}"}
+
         real_root = Path(os.path.realpath(self.root_path))
         state = {"count": 0, "truncated": False}
 
-        def scan(dir_path: Path, depth: int) -> list:
+        def scan(entries, depth: int) -> list:
             nodes = []
             if state["truncated"]:
-                return nodes
-            try:
-                entries = list(os.scandir(dir_path))
-            except Exception:
                 return nodes
 
             for entry in sorted(entries, key=lambda e: (not self._safe_is_dir(e), e.name.lower())):
@@ -230,13 +234,20 @@ class FileManager:
                 state["count"] += 1
 
                 if is_directory and depth < max_depth:
-                    node["children"] = scan(Path(entry.path), depth + 1)
+                    # Nested folders degrade gracefully: an unreadable
+                    # subfolder just ends up with no children instead of
+                    # failing the whole tree.
+                    try:
+                        child_entries = list(os.scandir(entry.path))
+                    except Exception:
+                        child_entries = []
+                    node["children"] = scan(child_entries, depth + 1)
 
                 nodes.append(node)
 
             return nodes
 
-        items = scan(root, 0)
+        items = scan(root_entries, 0)
 
         try:
             root_rel = str(root.relative_to(self.root_path))

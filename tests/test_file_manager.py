@@ -103,3 +103,31 @@ def test_list_tree_respects_max_entries():
         assert tree["truncated"] is True
         assert tree["scanned_entries"] <= 5
 
+def test_list_tree_surfaces_root_scan_error(monkeypatch):
+    # Regression test: a failure scanning the requested root directory must
+    # come back as a visible {"error": ...}, not a silently empty tree - an
+    # earlier version of list_tree swallowed this exception, which made
+    # unreadable/unusual mounts (e.g. some Kaggle setups) look like an
+    # empty workspace instead of reporting what actually went wrong.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        fm = FileManager(tmpdir)
+        fm.create_file("visible.py")
+
+        real_scandir = os.scandir
+        root_str = str(fm.root_path)
+
+        def broken_scandir(path=""):
+            if os.fspath(path) == root_str:
+                raise PermissionError("simulated permission failure")
+            return real_scandir(path)
+
+        monkeypatch.setattr(os, "scandir", broken_scandir)
+
+        result = fm.list_tree("")
+
+        monkeypatch.undo()  # restore before the tempdir context manager cleans up
+
+        assert "error" in result
+        assert "items" not in result
+
+
