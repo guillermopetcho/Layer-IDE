@@ -46,6 +46,7 @@ class Dash:
 
         self._register_comm_target()
         self._register_colab_callback()
+        self._register_global_rpc()
 
         if display_inline:
             ipy_display(self._render_html())
@@ -137,6 +138,23 @@ class Dash:
             output.register_callback(f"layer_dash_{self.instance_id}", colab_handler)
         except ImportError:
             pass
+
+    def _register_global_rpc(self):
+        """Register global Python RPC instance for iframe/kernel.execute fallback."""
+        import builtins
+        if not hasattr(builtins, "_layer_dash_instances"):
+            builtins._layer_dash_instances = {}
+        builtins._layer_dash_instances[self.instance_id] = self
+
+        if not hasattr(builtins, "_layer_rpc_call"):
+            def _rpc(instance_id, data):
+                inst = builtins._layer_dash_instances.get(instance_id)
+                if inst:
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    return inst.handle_message(data)
+                return {"error": f"Dash instance {instance_id} not found"}
+            builtins._layer_rpc_call = _rpc
 
     def _render_html(self) -> HTML:
         """Render complete HTML+CSS+JS widget template for IPython output."""

@@ -46,18 +46,74 @@
     let currentTreeItems = [];
     let imageViewerEl = null;
 
+    // --- Helper Functions to locate environment frames ---
+    function getAccessibleFrames() {
+      const frames = [window];
+      try {
+        if (window.parent && window.parent !== window) frames.push(window.parent);
+      } catch (e) {}
+      try {
+        if (window.top && window.top !== window && !frames.includes(window.top)) frames.push(window.top);
+      } catch (e) {}
+      return frames;
+    }
+
+    function findColabKernel() {
+      for (const win of getAccessibleFrames()) {
+        try {
+          if (win.google && win.google.colab && win.google.colab.kernel) {
+            return win.google.colab.kernel;
+          }
+        } catch (e) {}
+      }
+      return null;
+    }
+
+    function findJupyterKernel() {
+      for (const win of getAccessibleFrames()) {
+        try {
+          if (win.Jupyter && win.Jupyter.notebook && win.Jupyter.notebook.kernel) {
+            return win.Jupyter.notebook.kernel;
+          }
+          if (win.IPython && win.IPython.notebook && win.IPython.notebook.kernel) {
+            return win.IPython.notebook.kernel;
+          }
+          if (win._jupyterlab_kernel) {
+            return win._jupyterlab_kernel;
+          }
+        } catch (e) {}
+      }
+      return null;
+    }
+
+    function findIpywidgetsCommClass() {
+      for (const win of getAccessibleFrames()) {
+        try {
+          if (win.ipywidgets && win.ipywidgets.Comm) {
+            return win.ipywidgets.Comm;
+          }
+        } catch (e) {}
+      }
+      return null;
+    }
+
     // --- Communication Bridge ---
     function sendCommMessage(action, payload = {}) {
       return new Promise((resolve, reject) => {
         const msgData = { action: action, ...payload };
 
-        // 1. Check Google Colab Kernel
-        if (window.google && window.google.colab && window.google.colab.kernel) {
-          window.google.colab.kernel
+        // 1. Check Google Colab Kernel (Current, Parent, Top frames)
+        const colabKernel = findColabKernel();
+        if (colabKernel) {
+          colabKernel
             .invokeFunction('layer_dash_' + instanceId, [msgData], {})
             .then((res) => {
               if (res && res.data && res.data['application/json']) {
                 resolve(res.data['application/json']);
+              } else if (res && res.data && res.data['text/plain']) {
+                try {
+                  resolve(JSON.parse(res.data['text/plain']));
+                } catch (e) { resolve(res); }
               } else {
                 resolve(res);
               }
@@ -66,12 +122,35 @@
           return;
         }
 
-        // 2. Check Jupyter Notebook / Kaggle Kernel Comm
+        // 2. Check Custom Window Bridge if set on any accessible frame
+        for (const win of getAccessibleFrames()) {
+          try {
+            if (win['layer_bridge_' + instanceId]) {
+              win['layer_bridge_' + instanceId](msgData, resolve, reject);
+              return;
+            }
+          } catch (e) {}
+        }
+
+        // 3. Check Jupyter Notebook / Kaggle Kernel Comm
         if (!comm) {
-          if (window.Jupyter && window.Jupyter.notebook && window.Jupyter.notebook.kernel) {
-            comm = window.Jupyter.notebook.kernel.comm_manager.new_comm(commTarget, { instanceId });
-          } else if (window.ipywidgets && window.ipywidgets.Comm) {
-            comm = new window.ipywidgets.Comm(commTarget, { instanceId });
+          const jupyterKernel = findJupyterKernel();
+          if (jupyterKernel && jupyterKernel.comm_manager) {
+            try {
+              comm = jupyterKernel.comm_manager.new_comm(commTarget, { instanceId: instanceId });
+            } catch (e) {
+              console.warn('Layer IDE: Failed to initialize kernel new_comm:', e);
+            }
+          }
+          if (!comm) {
+            const CommClass = findIpywidgetsCommClass();
+            if (CommClass) {
+              try {
+                comm = new CommClass(commTarget, { instanceId: instanceId });
+              } catch (e) {
+                console.warn('Layer IDE: Failed to initialize ipywidgets.Comm:', e);
+              }
+            }
           }
         }
 
@@ -80,31 +159,77 @@
           msgData._msgId = msgId;
 
           const handler = (msg) => {
-            const res = msg.content.data;
-            if (res._msgId === msgId || !res._msgId) {
-              comm.un_msg(handler);
+            const res = msg.content ? msg.content.data : msg;
+            if (res && (res._msgId === msgId || !res._msgId)) {
+              if (typeof comm.un_msg === 'function') comm.un_msg(handler);
               if (res.error) reject(new Error(res.error));
               else resolve(res);
             }
           };
 
-          comm.on_msg(handler);
+          if (typeof comm.on_msg === 'function') comm.on_msg(handler);
           comm.send(msgData);
 
-          // Timeout fallback
           setTimeout(() => {
-            comm.un_msg(handler);
+            if (typeof comm.un_msg === 'function') comm.un_msg(handler);
             reject(new Error('Backend response timeout for action: ' + action));
           }, 15000);
-        } else {
-          // Direct fallback attempt via global window bridge if available
-          if (window['layer_bridge_' + instanceId]) {
-            window['layer_bridge_' + instanceId](msgData, resolve, reject);
-          } else {
-            showToast('No Jupyter Comm or Colab channel detected.', 'error');
-            reject(new Error('No notebook comm channel available.'));
-          }
+          return;
         }
+
+        // 4. Kernel.execute Fallback (works in Kaggle / JupyterLab when comm target isn't open)
+        const jupyterKernel = findJupyterKernel();
+        if (jupyterKernel && typeof jupyterKernel.execute === 'function') {
+          const payloadJsonStr = JSON.stringify(JSON.stringify(msgData));
+          const pyCmd = `import builtins, json; print("___LAYER_RPC___" + json.dumps(builtins._layer_rpc_call("${instanceId}", ${payloadJsonStr})) + "___END_LAYER_RPC___")`;
+
+          let completed = false;
+          try {
+            jupyterKernel.execute(
+              pyCmd,
+              {
+                iopub: {
+                  output: function(msg) {
+                    if (completed) return;
+                    if (msg.msg_type === 'stream' && msg.content && msg.content.text) {
+                      const text = msg.content.text;
+                      if (text.includes('___LAYER_RPC___')) {
+                        completed = true;
+                        try {
+                          const jsonStr = text.split('___LAYER_RPC___')[1].split('___END_LAYER_RPC___')[0];
+                          const res = JSON.parse(jsonStr);
+                          if (res.error) reject(new Error(res.error));
+                          else resolve(res);
+                        } catch (err) {
+                          reject(err);
+                        }
+                      }
+                    } else if (msg.msg_type === 'error') {
+                      completed = true;
+                      reject(new Error(msg.content.evalue || 'Python execution error'));
+                    }
+                  }
+                }
+              },
+              { silent: true, store_history: false }
+            );
+          } catch(e) {
+            reject(e);
+            return;
+          }
+
+          setTimeout(() => {
+            if (!completed) {
+              completed = true;
+              reject(new Error('Kernel RPC execution timeout for action: ' + action));
+            }
+          }, 15000);
+          return;
+        }
+
+        // 5. Direct error if all connection methods failed
+        showToast('No notebook comm channel or kernel connection detected.', 'error');
+        reject(new Error('No notebook comm channel available.'));
       });
     }
 

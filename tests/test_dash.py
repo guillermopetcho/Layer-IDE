@@ -26,3 +26,9 @@ def test_dash_initialization():
 
         read_res = dash.handle_message({"action": "read_file", "rel_path": "app.py"})
         assert read_res.get("content") == "print('test')"
+
+        # Test global RPC fallback via builtins._layer_rpc_call
+        import builtins
+        assert hasattr(builtins, "_layer_rpc_call")
+        rpc_res = builtins._layer_rpc_call(dash.instance_id, '{"action": "read_file", "rel_path": "app.py"}')
+        assert rpc_res.get("content") == "print('test')"
