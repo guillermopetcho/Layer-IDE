@@ -271,6 +271,11 @@
   color: var(--layer-text-strong);
 }
 
+.layer-icon-btn.active {
+  background-color: var(--layer-accent);
+  color: #ffffff;
+}
+
 .layer-file-tree {
   flex: 1;
   overflow-y: auto;

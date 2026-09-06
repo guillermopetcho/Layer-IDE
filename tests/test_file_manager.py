@@ -66,6 +66,20 @@ def test_file_manager_operations():
         fmt_res = fm.format_code("src/main.py")
         assert ("success" in fmt_res) or ("error" in fmt_res)
 
+def test_write_binary_file():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import base64
+        fm = FileManager(tmpdir)
+        raw = bytes([0x89, 0x50, 0x4E, 0x47, 0x00, 0x01, 0x02, 0x03])
+        encoded = base64.b64encode(raw).decode("ascii")
+
+        res = fm.write_binary_file("upload.bin", encoded)
+        assert res.get("success") is True
+        assert res.get("size") == len(raw)
+
+        with open(Path(tmpdir) / "upload.bin", "rb") as f:
+            assert f.read() == raw
+
 def test_path_security():
     with tempfile.TemporaryDirectory() as tmpdir:
         fm = FileManager(tmpdir, allow_outside=False)

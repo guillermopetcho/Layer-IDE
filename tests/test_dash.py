@@ -35,6 +35,20 @@ def test_dash_initialization():
         rpc_res = builtins._layer_rpc_call(dash.instance_id, '{"action": "read_file", "rel_path": "app.py"}')
         assert rpc_res.get("content") == "print('test')"
 
+def test_write_binary_file_rpc_action():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import base64
+        dash = Layer.Dash(tmpdir, display_inline=False)
+        encoded = base64.b64encode(b"fake-image-bytes").decode("ascii")
+
+        res = dash.handle_message({
+            "action": "write_binary_file",
+            "rel_path": "photo.png",
+            "content_base64": encoded,
+        })
+        assert res.get("success") is True
+        assert (Path(tmpdir) / "photo.png").read_bytes() == b"fake-image-bytes"
+
 def test_list_tree_rpc_action():
     with tempfile.TemporaryDirectory() as tmpdir:
         (Path(tmpdir) / "sub").mkdir()

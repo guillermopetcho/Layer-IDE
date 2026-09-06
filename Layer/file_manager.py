@@ -345,6 +345,24 @@ class FileManager:
         except Exception as e:
             return {"error": f"Failed to write file '{rel_path}': {str(e)}"}
 
+    def write_binary_file(self, rel_path: str, base64_content: str) -> dict:
+        """Write raw bytes decoded from base64 - used by the browser-side file upload picker for non-text files."""
+        path = self._resolve(rel_path)
+        try:
+            import base64
+            raw = base64.b64decode(base64_content)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(raw)
+            return {
+                "success": True,
+                "rel_path": rel_path,
+                "size": path.stat().st_size,
+                "mtime": path.stat().st_mtime,
+            }
+        except Exception as e:
+            return {"error": f"Failed to write binary file '{rel_path}': {str(e)}"}
+
     def create_file(self, rel_path: str) -> dict:
         path = self._resolve(rel_path)
         if path.exists():

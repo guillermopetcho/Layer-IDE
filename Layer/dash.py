@@ -91,6 +91,10 @@ class Dash:
                 response = self.file_manager.write_file(
                     data.get("rel_path", ""), data.get("content", "")
                 )
+            elif action == "write_binary_file":
+                response = self.file_manager.write_binary_file(
+                    data.get("rel_path", ""), data.get("content_base64", "")
+                )
             elif action == "create_file":
                 response = self.file_manager.create_file(data.get("rel_path", ""))
             elif action == "create_dir":
@@ -218,6 +222,8 @@ class Dash:
               </select>
               <button class="layer-btn layer-btn-format" title="Format Python Code">✨ Format</button>
               <button class="layer-btn layer-btn-ai" title="AI Code Copilot">🤖 AI Copilot</button>
+              <button class="layer-icon-btn layer-btn-autosave" title="Toggle Auto-Save">⏱️</button>
+              <button class="layer-icon-btn layer-btn-download" title="Download active file">⬇️</button>
               <button class="layer-btn layer-btn-save" title="Save file (Ctrl+S)">💾 Save</button>
               <button class="layer-btn layer-btn-success layer-btn-run" title="Run Python file (Ctrl+Enter)">▶ Run</button>
               <button class="layer-icon-btn layer-btn-fullscreen" title="Toggle Fullscreen">⛶</button>
@@ -234,8 +240,10 @@ class Dash:
                 <div class="layer-sidebar-actions">
                   <button class="layer-icon-btn layer-btn-new-file" title="New File">+</button>
                   <button class="layer-icon-btn layer-btn-new-folder" title="New Folder">📁</button>
+                  <button class="layer-icon-btn layer-btn-upload" title="Upload File(s)">⬆️</button>
                   <button class="layer-icon-btn layer-btn-refresh" title="Refresh Tree">🔄</button>
                 </div>
+                <input type="file" class="layer-upload-input" multiple style="display: none;" />
               </div>
               <div class="layer-search-container">
                 <input type="text" class="layer-search-input" placeholder="🔍 Filter files..." autocomplete="off" spellcheck="false" value="" />

@@ -45,6 +45,10 @@
     const newFileBtn = wrapper.querySelector('.layer-btn-new-file');
     const newFolderBtn = wrapper.querySelector('.layer-btn-new-folder');
     const refreshBtn = wrapper.querySelector('.layer-btn-refresh');
+    const uploadBtn = wrapper.querySelector('.layer-btn-upload');
+    const uploadInput = wrapper.querySelector('.layer-upload-input');
+    const downloadBtn = wrapper.querySelector('.layer-btn-download');
+    const autoSaveBtn = wrapper.querySelector('.layer-btn-autosave');
 
     // Reflect the auto-detected Kaggle root in the header so it's obvious
     // *why* the IDE opened where it did, instead of it looking arbitrary.
@@ -54,6 +58,28 @@
       badge.textContent = '🅺 Kaggle';
       badge.title = 'Raíz detectada automáticamente: /kaggle/working';
       breadcrumbsEl.after(badge);
+    }
+
+    // --- Persisted Preferences (theme, auto-save, sidebar width) ---
+    // localStorage can be unavailable inside some sandboxed/third-party
+    // notebook iframes (private browsing, strict cookie/storage policies),
+    // so every read/write is wrapped and degrades to "use the default"
+    // instead of throwing.
+    const PREF_PREFIX = 'layerDash:';
+    function loadPref(key, fallback) {
+      try {
+        const raw = window.localStorage.getItem(PREF_PREFIX + key);
+        return raw === null ? fallback : JSON.parse(raw);
+      } catch (e) {
+        return fallback;
+      }
+    }
+    function savePref(key, value) {
+      try {
+        window.localStorage.setItem(PREF_PREFIX + key, JSON.stringify(value));
+      } catch (e) {
+        // Storage unavailable - preference just won't persist across reloads.
+      }
     }
 
     // --- Theming ---
@@ -398,6 +424,9 @@
     let isDraggingV = false;
     let isDraggingH = false;
 
+    const savedSidebarWidth = loadPref('sidebarWidth', null);
+    if (savedSidebarWidth && sidebarEl) sidebarEl.style.width = savedSidebarWidth + 'px';
+
     if (splitterV) {
       splitterV.addEventListener('mousedown', (e) => {
         isDraggingV = true;
@@ -436,6 +465,7 @@
         isDraggingV = false;
         if (splitterV) splitterV.classList.remove('dragging');
         document.body.style.cursor = '';
+        if (sidebarEl) savePref('sidebarWidth', parseInt(sidebarEl.style.width, 10));
       }
       if (isDraggingH) {
         isDraggingH = false;
@@ -582,6 +612,7 @@
             renderTabs();
           }
         }
+        scheduleAutoSave();
       });
 
       fallbackTextarea.addEventListener('keydown', (e) => {
@@ -674,6 +705,7 @@
             renderTabs();
           }
         }
+        scheduleAutoSave();
       });
 
       // Keybinding: Ctrl+S / Cmd+S (Save)
@@ -838,10 +870,7 @@
             {
               label: 'Copy Relative Path',
               icon: '🔗',
-              action: () => {
-                navigator.clipboard.writeText(item.rel_path);
-                showToast('Copied path: ' + item.rel_path, 'success');
-              },
+              action: () => copyToClipboard(item.rel_path),
             },
             'divider',
             {
@@ -892,6 +921,40 @@
             loadTree();
           }
         });
+      }
+    }
+
+    // The async Clipboard API needs a permission grant that some sandboxed
+    // notebook iframes deny outright (or don't expose at all), and the
+    // previous code fired the "Copied" toast unconditionally without ever
+    // checking whether the write actually succeeded. This checks the real
+    // outcome and falls back to the legacy execCommand copy, and finally to
+    // a manual prompt, so the user always gets an accurate result.
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(
+          () => showToast('Copied path: ' + text, 'success'),
+          () => legacyCopyFallback(text)
+        );
+      } else {
+        legacyCopyFallback(text);
+      }
+    }
+
+    function legacyCopyFallback(text) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('execCommand copy returned false');
+        showToast('Copied path: ' + text, 'success');
+      } catch (e) {
+        prompt('No se pudo copiar automáticamente (permiso de portapapeles denegado). Copiá manualmente:', text);
       }
     }
 
@@ -1157,8 +1220,124 @@
     if (refreshBtn) refreshBtn.addEventListener('click', () => loadTree());
     if (clearTermBtn) clearTermBtn.addEventListener('click', () => { terminalContentEl.innerHTML = ''; });
 
+    // --- Download active file to the user's machine ---
+    // A plain <a download> click needs no special browser permission (it's
+    // an ordinary user-gesture-triggered download), which makes it a
+    // reliable way to get a file out of the notebook regardless of how
+    // restrictive the surrounding iframe is about anything else.
+    if (downloadBtn) {
+      downloadBtn.addEventListener('click', () => {
+        if (!activeTabPath) {
+          showToast('No hay ningún archivo activo para descargar', 'error');
+          return;
+        }
+        const tab = openTabs.find((t) => t.rel_path === activeTabPath);
+        if (!tab) return;
+
+        try {
+          let blob;
+          if (tab.is_image) {
+            const byteChars = atob(tab.image_src.split(',')[1]);
+            const byteNumbers = new Array(byteChars.length);
+            for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+            blob = new Blob([new Uint8Array(byteNumbers)], { type: tab.mime_type || 'application/octet-stream' });
+          } else {
+            blob = new Blob([monacoEditor.getValue()], { type: 'text/plain' });
+          }
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = tab.name;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(url), 2000);
+        } catch (e) {
+          showToast('No se pudo descargar el archivo: ' + e.message, 'error');
+        }
+      });
+    }
+
+    // --- Upload local file(s) into the workspace ---
+    // The native file picker is inherently user-permissioned (the browser
+    // shows its own dialog; the page never gets file access without the
+    // user explicitly choosing a file there), so this needs no extra
+    // permission handling beyond reacting to what the user picked.
+    const UPLOAD_TEXT_EXT = /\.(py|js|jsx|ts|tsx|html|htm|css|scss|json|md|markdown|sql|sh|bash|zsh|yml|yaml|xml|c|cpp|h|hpp|cs|java|rs|go|php|r|rb|toml|ini|txt|log|env|ipynb|csv)$/i;
+
+    function uploadOneFile(file) {
+      return new Promise((resolve) => {
+        const isText = UPLOAD_TEXT_EXT.test(file.name);
+        const reader = new FileReader();
+        reader.onload = () => {
+          const rpcCall = isText
+            ? sendCommMessage('write_file', { rel_path: file.name, content: reader.result })
+            : sendCommMessage('write_binary_file', { rel_path: file.name, content_base64: String(reader.result).split(',')[1] });
+          rpcCall
+            .then((res) => {
+              if (res.error) showToast('Error subiendo ' + file.name + ': ' + res.error, 'error');
+              else showToast('Subido: ' + file.name, 'success');
+            })
+            .catch((err) => showToast('Error subiendo ' + file.name + ': ' + err.message, 'error'))
+            .then(resolve);
+        };
+        reader.onerror = () => {
+          showToast('No se pudo leer el archivo: ' + file.name, 'error');
+          resolve();
+        };
+        if (isText) reader.readAsText(file);
+        else reader.readAsDataURL(file);
+      });
+    }
+
+    if (uploadBtn && uploadInput) {
+      uploadBtn.addEventListener('click', () => uploadInput.click());
+      uploadInput.addEventListener('change', (e) => {
+        const files = Array.from(e.target.files || []);
+        (async () => {
+          for (const file of files) {
+            await uploadOneFile(file);
+          }
+          uploadInput.value = '';
+          loadTree();
+        })();
+      });
+    }
+
+    // --- Auto-Save ---
+    let autoSaveEnabled = loadPref('autoSave', false);
+    let autoSaveTimer = null;
+
+    function updateAutoSaveBtn() {
+      if (autoSaveBtn) autoSaveBtn.classList.toggle('active', autoSaveEnabled);
+    }
+
+    function scheduleAutoSave() {
+      if (!autoSaveEnabled || !activeTabPath) return;
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = setTimeout(() => {
+        const tab = openTabs.find((t) => t.rel_path === activeTabPath);
+        if (tab && tab.is_dirty && !tab.is_image) saveActiveFile();
+      }, 1500);
+    }
+
+    if (autoSaveBtn) {
+      autoSaveBtn.addEventListener('click', () => {
+        autoSaveEnabled = !autoSaveEnabled;
+        savePref('autoSave', autoSaveEnabled);
+        updateAutoSaveBtn();
+        showToast('Auto-guardado ' + (autoSaveEnabled ? 'activado' : 'desactivado'), 'info');
+      });
+      updateAutoSaveBtn();
+    }
+
     if (themeSelect) {
-      themeSelect.addEventListener('change', (e) => applyTheme(e.target.value));
+      const savedTheme = loadPref('theme', null);
+      if (savedTheme && THEME_MAP[savedTheme]) themeSelect.value = savedTheme;
+      themeSelect.addEventListener('change', (e) => {
+        applyTheme(e.target.value);
+        savePref('theme', e.target.value);
+      });
       applyTheme(themeSelect.value);
     }
 
@@ -1354,6 +1533,21 @@
           modelName = prompt('Enter custom HuggingFace model repo ID:', 'Qwen/Qwen2.5-Coder-7B-Instruct');
         }
         if (modelName) {
+          const sizeHint = /32b/i.test(modelName)
+            ? '~20 GB'
+            : /27b/i.test(modelName)
+            ? '~16 GB'
+            : /14b/i.test(modelName)
+            ? '~9 GB'
+            : /6\.7b|7b/i.test(modelName)
+            ? '~5 GB'
+            : '~1-3 GB';
+          const proceed = confirm(
+            `Vas a descargar y cargar "${modelName}" en la GPU (tamaño aproximado: ${sizeHint}).\n\n` +
+              'Esto puede tardar varios minutos, ocupar espacio en disco y usar la mayor parte de la VRAM disponible. ¿Continuar?'
+          );
+          if (!proceed) return;
+
           if (aiBadge) {
             aiBadge.textContent = 'Downloading & Loading ' + modelName + '...';
             aiBadge.style.backgroundColor = '#d97706';
