@@ -143,11 +143,39 @@
       return null;
     }
 
-    function findIpywidgetsCommClass() {
+    // JupyterLab (which is what Kaggle's own notebook editor actually runs,
+    // confirmed by its `jupyterapp` / `_JUPYTERLAB` / `webpackChunk_*`
+    // globals — it never exposes the classic `window.Jupyter` this file
+    // otherwise looks for) keeps its main application instance on
+    // `window.jupyterapp`. Its kernel connection object has a different
+    // shape than the classic notebook's (`createComm`/`requestExecute`
+    // instead of `comm_manager.new_comm`/`execute`), handled separately at
+    // the call sites below.
+    function findJupyterLabKernel() {
       for (const win of getAccessibleFrames()) {
         try {
-          if (win.ipywidgets && win.ipywidgets.Comm) {
-            return win.ipywidgets.Comm;
+          const app = win.jupyterapp || win.jupyterlab;
+          if (!app || !app.shell) continue;
+
+          // Prefer the kernel behind the currently active notebook panel.
+          const current = app.shell.currentWidget;
+          const sessionContext = current && (current.sessionContext || current.session);
+          const session = sessionContext && (sessionContext.session || sessionContext);
+          if (session && session.kernel && typeof session.kernel.requestExecute === 'function') {
+            return session.kernel;
+          }
+
+          // Fall back to whatever the service manager reports as running.
+          const sessionManager = app.serviceManager && app.serviceManager.sessions;
+          if (sessionManager && typeof sessionManager.running === 'function') {
+            for (const model of Array.from(sessionManager.running())) {
+              if (model.kernel && typeof sessionManager.connectTo === 'function') {
+                const conn = sessionManager.connectTo({ model });
+                if (conn && conn.kernel && typeof conn.kernel.requestExecute === 'function') {
+                  return conn.kernel;
+                }
+              }
+            }
           }
         } catch (e) {}
       }
@@ -232,6 +260,31 @@
         : 'Sin canal de comunicación con el kernel';
     }
 
+    // Pending replies keyed by _msgId, dispatched by a single persistent
+    // comm message handler set up once when the comm is created. This is
+    // required for JupyterLab's Comm, whose `onMsg` is a single property
+    // (not a subscribe/unsubscribe list like classic Jupyter's `on_msg`) -
+    // reassigning it per call would silently drop whichever call's handler
+    // wasn't the most recent, breaking concurrent in-flight RPCs.
+    const pendingCommReplies = new Map();
+    function attachCommHandler(c) {
+      const dispatch = (msg) => {
+        const res = msg.content ? msg.content.data : msg;
+        const msgId = res && res._msgId;
+        if (msgId && pendingCommReplies.has(msgId)) {
+          const { resolve, reject } = pendingCommReplies.get(msgId);
+          pendingCommReplies.delete(msgId);
+          if (res.error) reject(new Error(res.error));
+          else resolve(res);
+        }
+      };
+      if (typeof c.on_msg === 'function') {
+        c.on_msg(dispatch);
+      } else {
+        c.onMsg = dispatch;
+      }
+    }
+
     // --- Communication Bridge ---
     function sendCommMessage(action, payload = {}) {
       return sendCommMessageRaw(action, payload).then(
@@ -274,7 +327,7 @@
           } catch (e) {}
         }
 
-        // 3. Check Jupyter Notebook / Kaggle Kernel Comm
+        // 3. Check Jupyter Notebook (classic) or JupyterLab (Kaggle) Kernel Comm
         if (!comm) {
           const jupyterKernel = findJupyterKernel();
           if (jupyterKernel && jupyterKernel.comm_manager) {
@@ -285,76 +338,77 @@
             }
           }
           if (!comm) {
-            const CommClass = findIpywidgetsCommClass();
-            if (CommClass) {
+            const jlKernel = findJupyterLabKernel();
+            if (jlKernel && typeof jlKernel.createComm === 'function') {
               try {
-                comm = new CommClass(commTarget, { instanceId: instanceId });
+                comm = jlKernel.createComm(commTarget);
+                comm.open({ instanceId: instanceId });
               } catch (e) {
-                console.warn('Layer IDE: Failed to initialize ipywidgets.Comm:', e);
+                console.warn('Layer IDE: Failed to create JupyterLab comm:', e);
+                comm = null;
               }
             }
           }
+          if (comm) attachCommHandler(comm);
         }
 
         if (comm) {
           const msgId = 'msg_' + Math.random().toString(36).substr(2, 9);
           msgData._msgId = msgId;
-
-          const handler = (msg) => {
-            const res = msg.content ? msg.content.data : msg;
-            if (res && (res._msgId === msgId || !res._msgId)) {
-              if (typeof comm.un_msg === 'function') comm.un_msg(handler);
-              if (res.error) reject(new Error(res.error));
-              else resolve(res);
-            }
-          };
-
-          if (typeof comm.on_msg === 'function') comm.on_msg(handler);
+          pendingCommReplies.set(msgId, { resolve, reject });
           comm.send(msgData);
 
           setTimeout(() => {
-            if (typeof comm.un_msg === 'function') comm.un_msg(handler);
-            reject(new Error('Backend response timeout for action: ' + action));
+            if (pendingCommReplies.has(msgId)) {
+              pendingCommReplies.delete(msgId);
+              reject(new Error('Backend response timeout for action: ' + action));
+            }
           }, 15000);
           return;
         }
 
-        // 4. Kernel.execute Fallback (works in Kaggle / JupyterLab when comm target isn't open)
-        const jupyterKernel = findJupyterKernel();
-        if (jupyterKernel && typeof jupyterKernel.execute === 'function') {
+        // 4. Kernel.execute Fallback (classic Jupyter API, or JupyterLab's
+        // requestExecute - used when a comm target isn't open yet)
+        const execKernel = findJupyterKernel() || findJupyterLabKernel();
+        if (execKernel && (typeof execKernel.execute === 'function' || typeof execKernel.requestExecute === 'function')) {
           const payloadJsonStr = JSON.stringify(JSON.stringify(msgData));
           const pyCmd = `import builtins, json; print("___LAYER_RPC___" + json.dumps(builtins._layer_rpc_call("${instanceId}", ${payloadJsonStr})) + "___END_LAYER_RPC___")`;
 
           let completed = false;
-          try {
-            jupyterKernel.execute(
-              pyCmd,
-              {
-                iopub: {
-                  output: function(msg) {
-                    if (completed) return;
-                    if (msg.msg_type === 'stream' && msg.content && msg.content.text) {
-                      const text = msg.content.text;
-                      if (text.includes('___LAYER_RPC___')) {
-                        completed = true;
-                        try {
-                          const jsonStr = text.split('___LAYER_RPC___')[1].split('___END_LAYER_RPC___')[0];
-                          const res = JSON.parse(jsonStr);
-                          if (res.error) reject(new Error(res.error));
-                          else resolve(res);
-                        } catch (err) {
-                          reject(err);
-                        }
-                      }
-                    } else if (msg.msg_type === 'error') {
-                      completed = true;
-                      reject(new Error(msg.content.evalue || 'Python execution error'));
-                    }
-                  }
+          const handleIOPubMsg = (msg) => {
+            if (completed) return;
+            if (msg.msg_type === 'stream' && msg.content && msg.content.text) {
+              const text = msg.content.text;
+              if (text.includes('___LAYER_RPC___')) {
+                completed = true;
+                try {
+                  const jsonStr = text.split('___LAYER_RPC___')[1].split('___END_LAYER_RPC___')[0];
+                  const res = JSON.parse(jsonStr);
+                  if (res.error) reject(new Error(res.error));
+                  else resolve(res);
+                } catch (err) {
+                  reject(err);
                 }
-              },
-              { silent: true, store_history: false }
-            );
+              }
+            } else if (msg.msg_type === 'error') {
+              completed = true;
+              reject(new Error(msg.content.evalue || 'Python execution error'));
+            }
+          };
+
+          try {
+            if (typeof execKernel.execute === 'function') {
+              // Classic Jupyter Notebook kernel API
+              execKernel.execute(
+                pyCmd,
+                { iopub: { output: handleIOPubMsg } },
+                { silent: true, store_history: false }
+              );
+            } else {
+              // JupyterLab kernel connection API (@jupyterlab/services)
+              const future = execKernel.requestExecute({ code: pyCmd, silent: true, store_history: false });
+              future.onIOPub = handleIOPubMsg;
+            }
           } catch(e) {
             reject(e);
             return;
